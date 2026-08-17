@@ -1,0 +1,322 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+.pane-body.chat-view-welcome-visible {
+
+	& > .interactive-session {
+		display: none;
+	}
+
+	& > .chat-view-welcome {
+		display: flex;
+	}
+}
+
+.interactive-session.chat-view-getting-started-disabled {
+
+	/* hide most welcome pieces when we show recent sessions to make some space */
+	.chat-welcome-view .chat-welcome-view-icon,
+	.chat-welcome-view .chat-welcome-view-title,
+	.chat-welcome-view .chat-welcome-view-message,
+	.chat-welcome-view .chat-welcome-view-disclaimer,
+	.chat-welcome-view .chat-welcome-view-tips {
+		display: none;
+	}
+}
+
+/* Chat welcome container */
+.interactive-session .chat-welcome-view-container {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	overflow: hidden;
+	flex: 1;
+	position: relative; /* Allow absolute positioning of prompts */
+}
+
+/* Container for ChatViewPane welcome view */
+.pane-body > .chat-view-welcome {
+	flex-direction: column;
+	justify-content: center;
+	overflow: hidden;
+	height: 100%;
+	display: none;
+}
+
+div.chat-welcome-view {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	padding: 12px;
+
+	& > .chat-welcome-view-icon {
+		min-height: 40px;
+	}
+
+	& > .chat-welcome-view-icon .codicon {
+		color: var(--vscode-descriptionForeground);
+		font-size: 40px;
+		margin-bottom: 24px;
+	}
+
+	& > .chat-welcome-view-icon.custom-icon {
+		mask-size: 40px;
+		-webkit-mask-size: 40px;
+	}
+
+	& > .chat-welcome-view-icon.large-icon {
+		min-width: 72px;
+		min-height: 72px;
+	}
+
+	& > .chat-welcome-view-icon.large-icon .codicon {
+		font-size: 72px;
+		width: 72px;
+		height: 72px;
+	}
+
+	& > .chat-welcome-view-icon.large-icon.custom-icon {
+		mask-size: 72px !important;
+		-webkit-mask-size: 72px !important;
+		width: 72px;
+		height: 72px;
+	}
+
+	& > .chat-welcome-view-title {
+		font-family: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+		font-size: 26px !important;
+		font-weight: 500 !important;
+		letter-spacing: -0.02em !important;
+		color: #ffffff !important;
+		margin-top: 16px !important;
+		text-align: center;
+		line-height: 1.3 !important;
+		padding: 0 16px;
+	}
+
+	& > .chat-welcome-view-message {
+		position: relative;
+		text-align: center;
+		max-width: 280px;
+		padding: 0 20px;
+		margin: 8px auto 0;
+		color: var(--vscode-descriptionForeground);
+		font-size: 12px;
+
+		a {
+			color: var(--vscode-textLink-foreground);
+		}
+
+		a:hover,
+		a:focus {
+			text-decoration: underline;
+			outline: 1px solid var(--vscode-focusBorder);
+		}
+
+		p {
+			margin: 0;
+		}
+	}
+
+	.monaco-button {
+		display: inline-block;
+		width: initial;
+	}
+
+	& > .chat-welcome-view-tips {
+		max-width: 250px;
+		margin: 10px 5px 0px;
+
+		a {
+			color: var(--vscode-textLink-foreground);
+		}
+
+		a:hover,
+		a:focus {
+			text-decoration: underline;
+			outline: 1px solid var(--vscode-focusBorder);
+		}
+
+		.rendered-markdown {
+			gap: 6px;
+			display: flex;
+			align-items: start;
+			flex-direction: column;
+		}
+
+		.rendered-markdown p {
+			display: flex;
+			gap: 6px;
+			margin: 6px 0 0 0;
+
+			.codicon {
+				padding-top: 1px;
+			}
+		}
+	}
+
+	& > .chat-welcome-view-disclaimer {
+		color: var(--vscode-descriptionForeground);
+		text-align: center;
+		margin: 0;
+		max-width: 256px;
+		padding: 0 12px;
+		font-size: 12px;
+
+		p {
+			margin: 0;
+		}
+
+		a {
+			color: var(--vscode-textLink-foreground);
+		}
+
+		a:hover,
+		a:focus {
+			text-decoration: underline;
+			outline: 1px solid var(--vscode-focusBorder);
+		}
+	}
+}
+
+/* Suggested prompts section - positioned at bottom of welcome container */
+.chat-welcome-view-suggested-prompts {
+	position: absolute;
+	bottom: 0;
+	left: 0;
+	right: 0;
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: flex-start;
+	gap: 8px;
+	/* Extra top padding for title */
+	padding: 32px 16px 8px 16px;
+	/* Avoids bleeding into other content since we use absolute positioning */
+	background: var(--vscode-chat-list-background);
+
+	.chat-welcome-view-suggested-prompts-title {
+		position: absolute;
+		top: 8px;
+		left: 16px;
+		font-size: 12px;
+		color: var(--vscode-descriptionForeground);
+		margin: 0;
+		text-align: left;
+	}
+
+	> .chat-welcome-view-suggested-prompt {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		height: 20px;
+		padding: 0 6px;
+		border-radius: 4px;
+		background-color: var(--vscode-editorWidget-background);
+		cursor: pointer;
+		border: 1px solid var(--vscode-chat-requestBorder, var(--vscode-input-background, transparent));
+		width: fit-content;
+		margin: 0;
+		box-sizing: border-box;
+		flex: 0 0 auto;
+
+		& > .chat-welcome-view-suggested-prompt-title {
+			font-size: 12px;
+			color: var(--vscode-editorWidget-foreground);
+			white-space: nowrap;
+		}
+	}
+
+	> .chat-welcome-view-suggested-prompt:hover {
+		background-color: var(--vscode-list-hoverBackground);
+	}
+}
+
+/* Codex Action Cards Grid */
+.codex-action-cards-container {
+	display: grid;
+	grid-template-columns: repeat(4, 1fr);
+	gap: 12px;
+	margin-top: 32px;
+	margin-bottom: 16px;
+	max-width: 820px;
+	width: 100%;
+	padding: 0 16px;
+	box-sizing: border-box;
+}
+
+@media (max-width: 768px) {
+	.codex-action-cards-container {
+		grid-template-columns: repeat(2, 1fr);
+	}
+}
+
+.codex-action-card {
+	display: flex;
+	flex-direction: column;
+	justify-content: space-between;
+	background-color: #0e0e0e;
+	border: 1px solid #222222;
+	border-radius: 12px;
+	padding: 16px;
+	height: 110px;
+	cursor: pointer;
+	transition: background-color 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
+	box-sizing: border-box;
+}
+
+.codex-action-card:hover {
+	background-color: #1a1a1a;
+	border-color: #444444;
+	transform: translateY(-2px);
+}
+
+.codex-card-icon {
+	margin-bottom: 12px;
+}
+
+.codex-card-icon .codicon {
+	font-size: 20px !important;
+	color: #aaaaaa !important;
+}
+
+.codex-action-card:hover .codex-card-icon .codicon {
+	color: #ffffff !important;
+}
+
+.codex-card-label {
+	font-family: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+	font-size: 13px;
+	font-weight: 500;
+	color: #dddddd;
+	line-height: 1.35;
+	display: -webkit-box;
+	-webkit-line-clamp: 2;
+	-webkit-box-orient: vertical;
+	overflow: hidden;
+}
+
+/* Floating Bottom Chat Input Bar ONLY on Agent Welcome View */
+.interactive-session:has(.chat-welcome-view) .interactive-input-part {
+	max-width: 780px !important;
+	width: calc(100% - 48px) !important;
+	margin: 0 auto 28px auto !important;
+	background-color: #0d0d0d !important;
+	border: 1px solid #242424 !important;
+	border-radius: 14px !important;
+	box-shadow: 0 16px 48px rgba(0, 0, 0, 0.75) !important;
+	padding: 12px 16px !important;
+}
+
+.interactive-session:has(.chat-welcome-view) .interactive-input-part:focus-within {
+	border-color: #444444 !important;
+	box-shadow: 0 20px 56px rgba(0, 0, 0, 0.9) !important;
+}
+
+.interactive-session:has(.chat-welcome-view) .interactive-input-editor .monaco-editor .placeholder-text {
+	color: #666666 !important;
+	font-family: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif !important;
+	font-size: 14px !important;
+}

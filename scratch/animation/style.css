@@ -1,0 +1,128 @@
+
+  /* ============================================================
+     TOKENS — monochrome Ethereal Depth. One ink, one ground.
+     ============================================================ */
+  :root {
+    color-scheme: dark;
+    --bg:         #08080B;
+    --bg-halo:    rgba(244, 245, 247, 0.05);
+    --bg-vign:    rgba(0, 0, 0, 0.55);
+    --ink:        #F4F5F7;
+    --hint:       rgba(244, 245, 247, 0.36);
+    --hint-hot:   rgba(244, 245, 247, 0.72);
+    --focus:      rgba(244, 245, 247, 0.55);
+    --glow-mult:  1;      /* bloom layer master gain              */
+    --chase-mult: 1;      /* soft under-stroke master gain        */
+    --comet-mult: 1;      /* circulating light master gain        */
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      color-scheme: light;
+      --bg:         #F5F5F3;
+      --bg-halo:    rgba(16, 16, 19, 0.045);
+      --bg-vign:    rgba(16, 16, 19, 0.07);
+      --ink:        #131316;
+      --hint:       rgba(19, 19, 22, 0.40);
+      --hint-hot:   rgba(19, 19, 22, 0.78);
+      --focus:      rgba(19, 19, 22, 0.5);
+      --glow-mult:  0.45;
+      --chase-mult: 0.7;
+      --comet-mult: 0.85;
+    }
+  }
+  /* The viewer's theme toggle must win in both directions. */
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg:         #08080B;
+    --bg-halo:    rgba(244, 245, 247, 0.05);
+    --bg-vign:    rgba(0, 0, 0, 0.55);
+    --ink:        #F4F5F7;
+    --hint:       rgba(244, 245, 247, 0.36);
+    --hint-hot:   rgba(244, 245, 247, 0.72);
+    --focus:      rgba(244, 245, 247, 0.55);
+    --glow-mult:  1;
+    --chase-mult: 1;
+    --comet-mult: 1;
+  }
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --bg:         #F5F5F3;
+    --bg-halo:    rgba(16, 16, 19, 0.045);
+    --bg-vign:    rgba(16, 16, 19, 0.07);
+    --ink:        #131316;
+    --hint:       rgba(19, 19, 22, 0.40);
+    --hint-hot:   rgba(19, 19, 22, 0.78);
+    --focus:      rgba(19, 19, 22, 0.5);
+    --glow-mult:  0.45;
+    --chase-mult: 0.7;
+    --comet-mult: 0.85;
+  }
+
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    min-height: 100dvh;
+    background: var(--bg);
+    overflow: hidden;
+    display: grid;
+    place-items: center;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  /* Stage atmosphere: a whisper of lift behind the mark, a vignette at the edge. */
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    background:
+      radial-gradient(circle at 50% 46%, var(--bg-halo), transparent 52%),
+      radial-gradient(ellipse at 50% 50%, transparent 62%, var(--bg-vign) 130%);
+  }
+
+  .stage {
+    width: min(74vmin, 620px);
+    aspect-ratio: 1;
+    position: relative;
+    perspective: 1500px;
+  }
+  /* The deck holds the whole body: the drawn front face plus the
+     copies stacked behind it that give the mark its thickness.   */
+  .deck {
+    position: absolute;
+    inset: 0;
+    transform-style: preserve-3d;
+    will-change: transform;
+  }
+  /* The solid and the tunnel live on full-screen canvases so the
+     passage can surround the viewer; the drawn face stays in the
+     stage box between them. All three share one perspective.     */
+  .body, .fore {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+  }
+  .body { z-index: 1; }
+  .stage { z-index: 2; }
+  .fore { z-index: 4; }
+  .stage svg { display: block; width: 100%; height: 100%; overflow: visible; }
+  .stage .occluder { fill: var(--bg); stroke: none; }
+
+  /* Every mark on stage is drawn in the one ink. */
+  .stage path, .stage circle {
+    stroke: var(--ink);
+    fill: none;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+  .stage .fillbody   { fill: var(--ink); stroke: none; }
+  .stage .tip-dot    { fill: var(--ink); stroke: none; }
+  .layer-bloom       { opacity: var(--glow-mult); }
+  .layer-chase       { opacity: var(--chase-mult); }
+  .layer-comet       { opacity: var(--comet-mult); }
+
+  body { cursor: pointer; }

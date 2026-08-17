@@ -1,0 +1,22 @@
+:root { color-scheme: dark; font-family: "Geist", sans-serif; background: #000000; color: #ffffff; }
+* { box-sizing: border-box; }
+html, body, #root { width: 100%; min-height: 100%; }
+html, body { min-height: 100vh; overflow: hidden; }
+body { margin: 0; display: grid; place-items: center; background: radial-gradient(circle at 50% 18%, #111111 0, #050505 48%, #000000 100%); -webkit-app-region: drag; }
+#root { display: grid; min-height: 100vh; place-items: center; padding: 32px 16px; }
+button, input, [role='button'] { -webkit-app-region: no-drag; }
+.auth-card { width: min(440px, calc(100vw - 32px)); padding: 40px; border: 1px solid rgb(255 255 255 / 28%); border-radius: 20px; background: linear-gradient(145deg, rgb(17 17 17 / 97%), rgb(0 0 0 / 97%)); box-shadow: 0 28px 80px rgb(0 0 0 / 65%), inset 0 1px rgb(255 255 255 / 8%); }
+.auth-icon { width: 56px; height: 56px; display: grid; place-items: center; margin: 0 auto 20px; border: 1px solid #ffffff; border-radius: 18px; background: rgb(255 255 255 / 8%); color: #ffffff; }
+.auth-icon svg { width: 26px; }
+h1, .auth-card > p { text-align: center; }
+h1 { margin: 0 0 10px; letter-spacing: -.025em; font-size: 26px; }
+.auth-card > p { margin: 0 0 26px; color: #ffffff; line-height: 1.5; }
+button { font: inherit; cursor: pointer; }
+button:focus-visible { outline: 2px solid #ffffff; outline-offset: 2px; }
+.auth-actions { display: grid; width: 100%; gap: 12px; margin-top: 4px; }
+.auth-action { width: 100%; min-height: 46px !important; }
+.auth-action-primary { background: #d7dce2 !important; color: #111318 !important; }
+.auth-action-primary:hover { background: #eef1f4 !important; }
+.auth-action-secondary { border-color: rgb(215 220 226 / 20%) !important; background: rgb(255 255 255 / 8%) !important; color: #eef1f4 !important; }
+.auth-action-secondary:hover { background: rgb(255 255 255 / 14%) !important; }
+@media (max-width: 480px) { .auth-card { padding: 28px 22px; border-radius: 16px; } }

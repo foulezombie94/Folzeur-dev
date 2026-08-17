@@ -1,0 +1,50 @@
+.appica-auth-active { overflow: hidden !important; }
+.appica-auth-pending { background: #0d0e11 !important; }
+.appica-auth-gate { position: fixed !important; z-index: 10000 !important; inset: 0 !important; display: grid !important; width: 100% !important; height: 100% !important; min-width: 0 !important; min-height: 0 !important; place-items: center !important; overflow: hidden !important; background: radial-gradient(circle at 50% 0%, #111111 0%, #050505 52%, #000000 100%) !important; color: #ffffff !important; opacity: 1 !important; }
+.appica-auth-gate, .appica-auth-gate-panel { -webkit-app-region: drag; }
+.appica-auth-gate-panel { display: flex; width: 100% !important; min-height: 100vh !important; flex-direction: column; align-items: center; justify-content: center; padding: 48px 24px; border: 0; border-radius: 0; background: transparent !important; box-shadow: none; color: #f5f7fa !important; text-align: center; }
+.appica-auth-gate-brand { display: grid; width: 64px; height: 64px; margin-bottom: 24px; place-items: center; border: 1px solid rgb(255 255 255 / 28%); border-radius: 18px; background: #000000; box-shadow: 0 14px 34px rgb(0 0 0 / 60%); color: #fff; font-size: 32px; font-weight: 700; }
+.appica-auth-gate-panel h1 { margin: 0 0 12px; font-size: clamp(26px, 3vw, 38px); letter-spacing: -0.03em; }
+.appica-auth-gate-panel > p { max-width: 380px; margin: 0 0 30px; color: #ffffff; line-height: 1.6; }
+.appica-auth-gate-actions { display: grid; width: min(272px, 100%); gap: 8px; margin-top: 8px; }
+.appica-auth-gate-action-host { width: 100%; }
+.appica-auth-gate-action-host button { display: flex !important; width: 100% !important; min-height: 34px !important; align-items: center !important; justify-content: center !important; border-radius: 6px !important; font-family: "Geist", sans-serif !important; font-size: 12px !important; font-weight: 500 !important; letter-spacing: -0.01em !important; transition: transform 140ms ease, box-shadow 140ms ease, background 140ms ease !important; }
+.appica-auth-gate-action-primary { border: 1px solid #ffffff !important; background: #000000 !important; color: #ffffff !important; box-shadow: 0 4px 12px rgb(0 0 0 / 45%) !important; }
+.appica-auth-gate-action-primary:hover { background: #171717 !important; box-shadow: 0 6px 16px rgb(0 0 0 / 60%) !important; transform: translateY(-1px); }
+.appica-auth-gate-action-secondary { border: 1px solid rgb(255 255 255 / 24%) !important; background: #000000 !important; color: #ffffff !important; }
+.appica-auth-gate-action-secondary:hover { background: #171717 !important; transform: translateY(-1px); }
+.appica-auth-gate-loading { display: grid; min-height: 112px; place-items: center; }
+.appica-auth-gate-loader [data-slot='loader'] { display: inline-flex !important; width: auto !important; height: auto !important; align-items: center !important; justify-content: center !important; font-size: 3.75rem !important; }
+@keyframes appica-bar-slide {
+	0% { transform: translateX(-100%); }
+	50% { transform: translateX(100%); }
+	100% { transform: translateX(-100%); }
+}
+
+.appica-auth-gate-loader [data-slot='loader'] {
+	position: relative !important;
+	overflow: hidden !important;
+	width: 2.4em !important;
+	height: .24em !important;
+	border-radius: 9999px !important;
+	background-color: rgb(255 255 255 / 20%) !important;
+}
+
+.appica-auth-gate-loader [data-slot='loader'] > svg,
+.appica-auth-gate-loader [data-slot='loader'] > div,
+.appica-auth-gate-loader [data-slot='loader'] span {
+	width: 42% !important;
+	height: 100% !important;
+	border-radius: 9999px !important;
+	background-color: #fff !important;
+	animation: appica-bar-slide 1.5s ease-in-out infinite !important;
+}
+.appica-auth-gate-loader [data-slot='loader'] svg.text-primary { color: #fff !important; }
+.appica-auth-gate-loader [data-slot='loader'] svg.text-primary-soft { color: rgb(255 255 255 / 20%) !important; }
+.appica-auth-gate-success { display: grid; width: clamp(84px, 18vw, 128px); height: clamp(84px, 18vw, 128px); place-items: center; border: 3px solid #ffffff; border-radius: 50%; background: rgb(255 255 255 / 8%); box-shadow: 0 0 42px rgb(255 255 255 / 18%); color: #ffffff; line-height: 1; }
+.appica-auth-gate-success svg { width: 62%; height: 62%; }
+.appica-auth-gate-status { min-height: 18px; margin: 16px 0 0 !important; color: #ffffff; font-size: 12px; }
+.appica-auth-gate-status.appica-auth-error { color: #f87171 !important; font-weight: 500; }
+.appica-auth-gate button, .appica-auth-gate input, .appica-auth-gate a, .appica-auth-gate [role='button'] { -webkit-app-region: no-drag; }
+[hidden] { display: none !important; }
+@media (max-width: 480px) { .appica-auth-gate-panel { padding: 32px 20px; } }

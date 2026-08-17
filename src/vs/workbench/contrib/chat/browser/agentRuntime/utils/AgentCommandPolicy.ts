@@ -1,0 +1,108 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+export type AgentCommandRisk = 'read_only' | 'verification' | 'mutation' | 'destructive';
+
+export interface VerificationAssessment {
+	readonly accepted: boolean;
+	readonly reason: string;
+}
+
+export interface CommandSandboxAssessment {
+	readonly allowed: boolean;
+	readonly reason: string;
+}
+
+const SHELL_CONTROL = /(?:\r|\n|[;&|><`]|\$\(|\$\{|\^\(|%\w+%|!\w+!)/;
+const READ_ONLY_COMMAND = /^(?:git\s+(?:status|diff|log|show|branch\s+--show-current)\b|(?:rg|grep)\b)/i;
+const TEST_COMMAND = /^(?:(?:npm|pnpm)\s+(?:test\b|run\s+[\w:.-]*test[\w:.-]*\b)|yarn\s+(?:test\b|[\w:.-]*test[\w:.-]*\b)|cargo\s+test\b|(?:python(?:3)?\s+-m\s+)?pytest\b|(?:npx\s+)?(?:vitest|jest|mocha)\b|go\s+test\b|dotnet\s+test\b)/i;
+const BUILD_COMMAND = /^(?:(?:npm|pnpm)\s+run\s+(?:build|compile|typecheck|check|lint)(?::[\w.-]+)?\b|yarn\s+(?:build|compile|typecheck|check|lint)\b|cargo\s+(?:build|check|clippy)\b|(?:npx\s+)?tsc\b|go\s+build\b|dotnet\s+build\b)/i;
+const DESTRUCTIVE_COMMAND = /(?:^|[\s;&|()])(?:rm\s+-[^\r\n;&|]*r[^\r\n;&|]*f|(?:remove-item|ri)\b[^\r\n;&|]*(?:-recurse|-force)|(?:rmdir|rd|del|erase)\b[^\r\n;&|]*(?:\/(?:s|q)|-recurse|-force)|git\s+(?:reset\s+--hard|clean\s+-[^\r\n;&|]*f|push\b[^\r\n;&|]*--force)|format\s+[a-z]:|diskpart\b|(?:drop\s+(?:database|table|schema)|truncate\s+table)\b|(?:shutdown|stop-computer|restart-computer|taskkill|kill)\b|(?:reg|sc)\s+delete\b|docker\s+(?:system|volume|image)\s+prune\b|kubectl\s+delete\b|terraform\s+destroy\b|powershell(?:\.exe)?\b[^\r\n;&|]*(?:-encodedcommand|-enc)\b)/i;
+const NESTED_INTERPRETER = /^(?:python(?:3|\.exe)?\s+-c\b|node(?:\.exe)?\s+(?:-e|--eval)\b|(?:powershell|pwsh)(?:\.exe)?\s+(?:-c|-command|-encodedcommand|-enc)\b|cmd(?:\.exe)?\s+\/(?:c|k)\b|(?:ba|z|fi)?sh\s+-c\b)/i;
+const EMPTY_VERIFICATION = /(?:\bno tests? (?:found|collected|ran)\b|\b0 tests?\b|\b0 passing\b|command not found|is not recognized as an internal or external command)/i;
+
+function normalize(command: string): string {
+	return command.trim().replace(/\s+/g, ' ');
+}
+
+function canonicalForRisk(command: string): string {
+	// Joining quoted command fragments is a common way to bypass token-based deny rules.
+	// This is still best-effort parsing, so unknown commands remain mutations.
+	return normalize(command).replace(/["']/g, '');
+}
+
+export function hasShellControlOperators(command: string): boolean {
+	return SHELL_CONTROL.test(command);
+}
+
+/** Unknown/free-form terminal commands are mutations by default. */
+export function classifyAgentCommand(command: string): AgentCommandRisk {
+	const normalized = canonicalForRisk(command);
+	if (DESTRUCTIVE_COMMAND.test(normalized)) {
+		return 'destructive';
+	}
+	if (!normalized || hasShellControlOperators(command)) {
+		return 'mutation';
+	}
+	if (TEST_COMMAND.test(normalized) || BUILD_COMMAND.test(normalized)) {
+		return 'verification';
+	}
+	return READ_ONLY_COMMAND.test(normalized) ? 'read_only' : 'mutation';
+}
+
+/** An allowlist entry can never turn an unknown or state-changing command into a read-only command. */
+export function isAllowlistedCommand(command: string, configuredPrefixes: readonly string[]): boolean {
+	const normalized = normalize(command);
+	const risk = classifyAgentCommand(normalized);
+	if (!normalized || hasShellControlOperators(command) || risk === 'mutation' || risk === 'destructive') {
+		return false;
+	}
+	return configuredPrefixes.some(value => {
+		const prefix = normalize(value);
+		return prefix.length > 0 && !hasShellControlOperators(prefix) && (normalized === prefix || normalized.startsWith(`${prefix} `));
+	});
+}
+
+/** Fail-closed workspace boundary for free-form terminal commands. */
+export function assessCommandSandbox(command: string, cwd: string): CommandSandboxAssessment {
+	const normalizedCwd = normalizePath(cwd);
+	if (!normalizedCwd) {return { allowed: false, reason: 'the terminal workspace is not available' };}
+	if (/\0|\r|\n/.test(command)) {return { allowed: false, reason: 'multiline or null-containing commands are not accepted' };}
+	if (hasShellControlOperators(command)) {return { allowed: false, reason: 'shell chaining, substitution, and redirection are not accepted by the terminal boundary' };}
+	if (NESTED_INTERPRETER.test(normalize(command))) {return { allowed: false, reason: 'nested interpreter code cannot be constrained to the workspace boundary' };}
+	if (/(?:^|\s)(?:\.\.[\\/])|(?:^|\s)~[\\/]|\$(?:env:)?[A-Za-z_][A-Za-z0-9_]*|%[A-Za-z_][A-Za-z0-9_]*%/i.test(command)) {
+		return { allowed: false, reason: 'the command contains an unresolved path outside the workspace' };
+	}
+	const absolutePaths = command.match(/(?:[A-Za-z]:[\\/][^\s"'`;|<>]+|\\\\[^\s"'`;|<>]+|\/(?:[^\s"'`;|<>]+\/)+[^\s"'`;|<>]*)/g) ?? [];
+	for (const path of absolutePaths) {
+		const normalized = normalizePath(path);
+		if (normalized && normalized !== normalizedCwd && !normalized.startsWith(`${normalizedCwd}/`)) {
+			return { allowed: false, reason: `absolute target is outside the workspace: ${path}` };
+		}
+	}
+	return { allowed: true, reason: 'command targets remain inside the workspace boundary' };
+}
+
+export function assessVerification(toolName: 'run_tests' | 'build', command: string, exitCode: number | undefined, output: string): VerificationAssessment {
+	const normalized = normalize(command);
+	if (exitCode !== 0) {
+		return { accepted: false, reason: `verification command exited with code ${String(exitCode)}` };
+	}
+	if (!normalized || hasShellControlOperators(command)) {
+		return { accepted: false, reason: 'verification commands must be one direct command without shell control operators' };
+	}
+	const matchesRunner = toolName === 'run_tests' ? TEST_COMMAND.test(normalized) : BUILD_COMMAND.test(normalized);
+	if (!matchesRunner) {
+		return { accepted: false, reason: `command is not a recognized ${toolName === 'run_tests' ? 'test runner' : 'build/typecheck runner'}` };
+	}
+	if (toolName === 'run_tests' && EMPTY_VERIFICATION.test(output)) {
+		return { accepted: false, reason: 'the test runner did not execute any tests' };
+	}
+	return { accepted: true, reason: 'recognized verification command completed successfully' };
+}
+
+function normalizePath(value: string): string {
+	return value.trim().replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+}

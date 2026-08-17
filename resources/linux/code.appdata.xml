@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop">
+	<id>@@NAME@@.desktop</id>
+	<metadata_license>@@LICENSE@@</metadata_license>
+	<project_license>@@LICENSE@@</project_license>
+	<name>@@NAME_LONG@@</name>
+	<url type="homepage">https://folzeur.app</url>
+	<summary>Folzeur. Code editing for developers.</summary>
+	<description>
+		<p>Folzeur is a powerful, extensible code editor for the edit-build-debug cycle.</p>
+	</description>
+	<screenshots>
+		<screenshot type="default">
+			<caption>Editing code and working with extensions</caption>
+		</screenshot>
+	</screenshots>
+</component>

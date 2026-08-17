@@ -1,0 +1,747 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+.settings-home {
+	height: 100%;
+	overflow: hidden;
+	background: var(--vscode-editor-background);
+	color: var(--vscode-foreground);
+	container-type: inline-size;
+	container-name: settings-home;
+}
+
+.settings-home-content {
+	display: grid;
+	grid-template-columns: 240px minmax(0, 1fr);
+	height: 100%;
+	max-width: 1440px;
+	margin: 0 auto;
+}
+
+.settings-home-sidebar {
+	display: flex;
+	flex-direction: column;
+	box-sizing: border-box;
+	overflow-y: auto;
+	padding: 32px 20px;
+	border-right: 1px solid var(--vscode-sideBar-border, var(--vscode-panel-border));
+	background: var(--vscode-sideBar-background);
+}
+
+.settings-home-profile {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	margin-bottom: 22px;
+	width: 100%;
+}
+
+.settings-home-profile .appica-sidebar-account-trigger-wrapper {
+	display: flex;
+	align-items: center;
+	width: 100%;
+	padding: 6px 8px;
+	border: 0;
+	background: transparent;
+	border-radius: 8px;
+	cursor: pointer;
+	text-align: left;
+	transition: background 0.15s ease-in-out;
+}
+
+.settings-home-profile .appica-sidebar-account-trigger-wrapper:hover {
+	background: var(--vscode-toolbar-hoverBackground, rgba(255, 255, 255, 0.08));
+}
+
+.settings-home-profile .appica-sidebar-account-trigger-content {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	min-width: 0;
+	width: 100%;
+}
+
+.settings-home-profile .appica-sidebar-account-avatar {
+	width: 30px;
+	height: 30px;
+	flex: 0 0 auto;
+	display: grid;
+	place-items: center;
+	border-radius: 50%;
+	background: #000000;
+	color: #ffffff;
+	font-size: 12px;
+	font-weight: 600;
+}
+
+.settings-home-profile .appica-sidebar-account-name {
+	font-size: 13px;
+	font-weight: 600;
+	color: var(--vscode-foreground);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.settings-home-avatar {
+	display: grid;
+	width: 30px;
+	height: 30px;
+	place-items: center;
+	border-radius: 50%;
+	background: var(--vscode-badge-background);
+	color: var(--vscode-badge-foreground);
+	font-size: 12px;
+	font-family: var(--monaco-monospace-font);
+}
+
+.settings-home-profile-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.settings-home-profile-text strong { font-size: 12px; font-weight: 600; }
+.settings-home-profile-text span { color: var(--vscode-descriptionForeground); font-size: 11px; }
+.settings-home-profile-action { margin-left: auto; border: 0; background: transparent; color: var(--vscode-textLink-foreground); font: inherit; font-size: 11px; cursor: pointer; }
+.settings-home-profile-action-host { margin-left: auto; flex: 0 0 auto; }
+.settings-home-account-menu-trigger { max-width: 160px; font-family: "Geist", sans-serif !important; }
+
+.settings-home-search,
+.settings-home-nav-item,
+.settings-home-action,
+.settings-home-toggle,
+.settings-home-select,
+.settings-home-text {
+	font: inherit;
+}
+
+.settings-home-search,
+.settings-home-nav-item,
+.settings-home-action,
+.settings-home-toggle,
+.settings-home-select { cursor: pointer; }
+
+.settings-home-search {
+	width: 100%;
+	height: 31px;
+	box-sizing: border-box;
+	padding: 7px 9px;
+	border: 1px solid var(--vscode-input-border, transparent);
+	border-radius: 6px;
+	background: var(--vscode-input-background);
+	color: var(--vscode-input-placeholderForeground);
+	font-size: 12px;
+}
+
+.settings-home-navigation { display: flex; flex: 1; flex-direction: column; gap: 3px; margin-top: 12px; }
+
+.settings-home-nav-separator {
+	height: 1px;
+	margin: 10px 0;
+	background: var(--vscode-sideBar-border, var(--vscode-panel-border));
+}
+
+.settings-home-nav-item {
+	display: flex;
+	align-items: center;
+	gap: 9px;
+	width: 100%;
+	padding: 7px 8px;
+	border: 0;
+	border-radius: 6px;
+	background: transparent;
+	color: var(--vscode-sideBar-foreground);
+	text-align: left;
+}
+
+.settings-home-nav-item:hover { background: var(--vscode-list-hoverBackground); }
+.settings-home-nav-item.selected { background: var(--vscode-list-activeSelectionBackground); color: var(--vscode-list-activeSelectionForeground); font-weight: 600; }
+.settings-home-nav-item .codicon { font-size: 14px; }
+
+@container settings-home (max-width: 720px) {
+	.settings-home-content { grid-template-columns: 96px minmax(0, 1fr); }
+	.settings-home-sidebar { padding: 24px 8px; overflow-x: hidden; }
+	.settings-home-profile { justify-content: center; }
+	.settings-home-profile .appica-sidebar-account-trigger-wrapper { justify-content: center; padding: 6px; }
+	.settings-home-profile .appica-sidebar-account-trigger-content { justify-content: center; }
+	.settings-home-profile .appica-sidebar-account-name,
+	.settings-home-profile-text,
+	.settings-home-profile-action-host { display: none; }
+	.settings-home-search { display: none !important; }
+	.settings-home-nav-item { justify-content: center; padding: 9px 4px; }
+	.settings-home-nav-label { display: none; }
+	.settings-home-nav-item .codicon { margin: 0; font-size: 16px; }
+	.settings-home-nav-separator { margin: 10px 4px; }
+	.settings-home-upgrade { justify-content: center; padding: 9px 4px; border-radius: 6px; }
+	.settings-home-upgrade span { display: none !important; }
+	.settings-home-upgrade .codicon { margin: 0; font-size: 16px; }
+}
+
+/* Keep the settings categories compact when the application window is restored. */
+@media (max-width: 1300px) {
+	.settings-home-content { grid-template-columns: 96px minmax(0, 1fr); }
+	.settings-home-sidebar { padding: 24px 8px; overflow-x: hidden; }
+	.settings-home-profile { justify-content: center; }
+	.settings-home-profile .appica-sidebar-account-trigger-wrapper { justify-content: center; padding: 6px; }
+	.settings-home-profile .appica-sidebar-account-trigger-content { justify-content: center; }
+	.settings-home-profile .appica-sidebar-account-name,
+	.settings-home-profile-text,
+	.settings-home-profile-action-host { display: none; }
+	.settings-home-search { display: none !important; }
+	.settings-home-nav-item { justify-content: center; padding: 9px 4px; }
+	.settings-home-nav-label { display: none; }
+	.settings-home-nav-item .codicon { margin: 0; font-size: 16px; }
+	.settings-home-nav-separator { margin: 10px 4px; }
+	.settings-home-upgrade { justify-content: center; padding: 9px 4px; border-radius: 6px; }
+	.settings-home-upgrade span { display: none !important; }
+	.settings-home-upgrade .codicon { margin: 0; font-size: 16px; }
+}
+
+.settings-home-upgrade {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	width: 100%;
+	margin-top: 16px;
+	padding: 7px 9px;
+	border: 1px solid var(--vscode-button-border, var(--vscode-contrastBorder));
+	border-radius: 6px;
+	background: var(--vscode-button-secondaryBackground);
+	color: var(--vscode-button-secondaryForeground);
+	font: inherit;
+	font-size: 12px;
+	font-weight: 600;
+	text-align: left;
+}
+
+.settings-home-upgrade:hover { background: var(--vscode-button-secondaryHoverBackground); }
+
+.settings-home-main {
+	box-sizing: border-box;
+	overflow: auto;
+	padding: 52px clamp(32px, 7vw, 112px) 64px;
+}
+
+.settings-home-main > h1 { margin: 0; font-size: 26px; line-height: 1.2; }
+.settings-home-lead { margin: 7px 0 28px; color: var(--vscode-descriptionForeground); }
+
+.settings-home-notice {
+	display: flex;
+	gap: 12px;
+	box-sizing: border-box;
+	max-width: 900px;
+	margin-bottom: 28px;
+	padding: 15px 16px;
+	border: 1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border));
+	border-radius: 9px;
+	background: var(--vscode-editorWidget-background);
+}
+
+.settings-home-notice > .codicon { color: var(--vscode-textLink-foreground); font-size: 18px; }
+.settings-home-appica-icon {
+	display: grid;
+	flex: 0 0 auto;
+	width: 20px;
+	height: 20px;
+	place-items: center;
+	color: var(--vscode-textLink-foreground);
+}
+
+.settings-home-appica-icon svg { width: 20px; height: 20px; }
+.settings-home-notice-text { display: flex; flex-direction: column; gap: 3px; font-size: 12px; }
+.settings-home-notice-text span { color: var(--vscode-descriptionForeground); }
+
+.settings-home-section { max-width: 900px; margin-top: 24px; }
+.settings-home-section h2 { margin: 0 0 9px; font-size: 13px; font-weight: 600; }
+
+.settings-home-card {
+	overflow: hidden;
+	border: 1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border));
+	border-radius: 9px;
+	background: var(--vscode-editorWidget-background);
+}
+
+.settings-home-row {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	min-height: 62px;
+	padding: 10px 14px;
+	border-bottom: 1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border));
+}
+
+.settings-home-row:last-child { border-bottom: 0; }
+.settings-home-row-icon { color: var(--vscode-descriptionForeground); }
+.settings-home-row-text { display: flex; flex: 1; flex-direction: column; gap: 3px; min-width: 0; }
+.settings-home-row-text strong { font-size: 13px; font-weight: 600; }
+.settings-home-row-text span { color: var(--vscode-descriptionForeground); font-size: 12px; }
+
+.settings-home-action {
+	padding: 4px 9px;
+	border: 1px solid var(--vscode-button-border, var(--vscode-contrastBorder));
+	border-radius: 5px;
+	background: var(--vscode-button-secondaryBackground);
+	color: var(--vscode-button-secondaryForeground);
+}
+
+.settings-home-action:hover { background: var(--vscode-button-secondaryHoverBackground); }
+
+.settings-home-appica-control { flex: 0 0 auto; }
+
+/* Appica's Button is mounted here; these host styles bind it to workbench theme tokens. */
+.settings-home-appica-button {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-height: 26px;
+	padding: 4px 9px;
+	border: 1px solid var(--vscode-button-border, var(--vscode-contrastBorder));
+	border-radius: 5px;
+	background: var(--vscode-button-secondaryBackground);
+	color: var(--vscode-button-secondaryForeground);
+	font: inherit;
+	font-size: 12px;
+	cursor: pointer;
+}
+
+.settings-home-appica-button:hover { background: var(--vscode-button-secondaryHoverBackground); }
+.settings-home-appica-button:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px; }
+
+.settings-home-select,
+.settings-home-text {
+	box-sizing: border-box;
+	min-width: 168px;
+	max-width: 240px;
+	height: 28px;
+	padding: 0 8px;
+	border: 1px solid var(--vscode-dropdown-border, var(--vscode-input-border, transparent));
+	border-radius: var(--vscode-cornerRadius-small, 4px);
+	outline: none;
+	background: var(--vscode-dropdown-background, var(--vscode-input-background));
+	color: var(--vscode-dropdown-foreground, var(--vscode-input-foreground));
+}
+
+.settings-home-text {
+	background: var(--vscode-input-background);
+	color: var(--vscode-input-foreground);
+}
+
+.settings-home-select:focus-visible,
+.settings-home-text:focus-visible,
+.settings-home-toggle:focus-visible {
+	outline: 1px solid var(--vscode-focusBorder);
+	outline-offset: 2px;
+}
+
+.settings-home-text:disabled {
+	cursor: not-allowed;
+	opacity: 0.55;
+}
+
+.settings-home-plugin-banner {
+	display: flex;
+	align-items: center;
+	gap: 14px;
+	box-sizing: border-box;
+	max-width: 900px;
+	margin: 0 0 30px;
+	padding: 13px 15px;
+	border: 1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border));
+	border-radius: 9px;
+	background: var(--vscode-editorWidget-background);
+}
+.settings-home-plugin-banner-text { display: flex; flex: 1; flex-direction: column; gap: 3px; font-size: 12px; }
+.settings-home-plugin-banner-text span, .settings-home-plugin-heading-text span { color: var(--vscode-descriptionForeground); }
+.settings-home-plugin-heading { display: flex; align-items: end; gap: 12px; max-width: 900px; margin-bottom: 18px; }
+.settings-home-plugin-heading-text { display: flex; flex: 1; flex-direction: column; gap: 4px; }
+.settings-home-plugin-heading h2 { margin: 0; font-size: 18px; }
+.settings-home-plugin-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; max-width: 900px; margin-bottom: 20px; }
+.settings-home-plugin-filters { display: flex; gap: 4px; }
+.settings-home-plugin-filter { padding: 4px 9px; border: 0; border-radius: 5px; background: transparent; color: var(--vscode-foreground); font: inherit; font-size: 12px; cursor: pointer; }
+.settings-home-plugin-filter.selected { background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); }
+.settings-home-plugin-search { width: min(280px, 50%); height: 29px; padding: 5px 9px; border: 1px solid var(--vscode-input-border, transparent); border-radius: 6px; background: var(--vscode-input-background); color: var(--vscode-input-foreground); font: inherit; font-size: 12px; }
+.settings-home-plugin-action { padding: 5px 10px; border: 1px solid var(--vscode-button-border, transparent); border-radius: 5px; background: var(--vscode-button-background); color: var(--vscode-button-foreground); font: inherit; font-size: 12px; cursor: pointer; }
+.settings-home-plugin-action:hover { background: var(--vscode-button-hoverBackground); }
+.settings-home-plugin-results { max-width: 900px; }
+.settings-home-plugin-suggested-label { display: block; margin: 0 0 10px; color: var(--vscode-textLink-foreground); font-size: 12px; }
+.settings-home-plugin-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.settings-home-plugin-card { position: relative; display: flex; align-items: center; gap: 11px; min-height: 67px; padding: 10px 12px; border: 0; border-radius: 7px; background: var(--vscode-editorWidget-background); color: var(--vscode-foreground); text-align: left; font: inherit; cursor: pointer; }
+.settings-home-plugin-card:hover { background: var(--vscode-list-hoverBackground); }
+.settings-home-plugin-card-action { display: flex; flex: 0 0 auto; align-items: center; }
+.settings-home-plugin-open-button { color: var(--vscode-descriptionForeground); }
+.settings-home-plugin-icon { display: grid; flex: 0 0 auto; width: 34px; height: 34px; place-items: center; overflow: hidden; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); }
+.settings-home-plugin-icon img { width: 100%; height: 100%; object-fit: cover; }
+.settings-home-plugin-card-text { display: flex; flex: 1; flex-direction: column; min-width: 0; gap: 3px; }
+.settings-home-plugin-card-text strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.settings-home-plugin-card-text span { overflow: hidden; color: var(--vscode-descriptionForeground); text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.settings-home-plugin-meta { display: flex; flex-direction: column; align-items: end; gap: 3px; color: var(--vscode-descriptionForeground); font-size: 10px; white-space: nowrap; }
+.settings-home-plugin-state, .settings-home-plugin-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; min-height: 136px; padding: 20px; border-radius: 9px; background: var(--vscode-editorWidget-background); color: var(--vscode-descriptionForeground); text-align: center; }
+.settings-home-plugin-empty strong { color: var(--vscode-foreground); font-size: 15px; }
+.settings-home-plugin-empty span { max-width: 460px; font-size: 12px; }
+.settings-home-plugin-modal { position: fixed; z-index: 10; inset: 0; display: grid; place-items: center; padding: 28px; background: color-mix(in srgb, var(--vscode-editor-background) 42%, transparent); backdrop-filter: blur(2px); }
+.settings-home-plugin-dialog { position: relative; display: flex; width: min(620px, 100%); max-height: min(78vh, 760px); flex-direction: column; overflow-y: auto; padding: 18px 22px 22px; border: 1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border)); border-radius: 12px; background: var(--vscode-editorWidget-background); box-shadow: 0 22px 70px rgb(0 0 0 / 45%); }
+.settings-home-plugin-dialog h2 { margin: 0 34px 10px 0; font-size: 18px; }
+.settings-home-plugin-dialog p { color: var(--vscode-descriptionForeground); line-height: 1.5; }
+.settings-home-plugin-close { position: absolute; top: 12px; right: 12px; border: 0; background: transparent; color: var(--vscode-foreground); cursor: pointer; }
+.settings-home-plugin-back { align-self: flex-start; margin: 0 0 16px; padding: 3px 0; border: 0; background: transparent; color: var(--vscode-textLink-foreground); font: inherit; font-size: 12px; cursor: pointer; }
+.settings-home-plugin-back:hover { color: var(--vscode-textLink-activeForeground); text-decoration: underline; }
+.settings-home-plugin-detail-title { display: flex; align-items: center; gap: 10px; padding-right: 34px; }
+.settings-home-plugin-detail-title h2 { margin: 0; }
+.settings-home-plugin-detail-icon { width: 32px; height: 32px; border-radius: 6px; object-fit: contain; }
+.settings-home-plugin-detail-section-title { flex: 0 0 auto; margin: 18px 0 7px; color: var(--vscode-descriptionForeground); font-size: 12px; font-weight: 500; }
+.settings-home-plugin-detail-list { flex: 0 0 auto; overflow: visible; border: 1px solid var(--vscode-panel-border); border-radius: 7px; background: var(--vscode-editorWidget-background); }
+.settings-home-plugin-detail-row { display: flex; flex: 0 0 auto; flex-direction: column; gap: 3px; min-height: 42px; padding: 9px 12px; border-bottom: 1px solid var(--vscode-panel-border); }
+.settings-home-plugin-detail-row:last-child { border-bottom: 0; }
+.settings-home-plugin-detail-row strong { font-size: 12px; }
+.settings-home-plugin-detail-row span { color: var(--vscode-descriptionForeground); font-size: 11px; }
+.settings-home-plugin-security-note { color: var(--vscode-descriptionForeground); font-size: 11px; line-height: 1.45; }
+.settings-home-plugin-detail-meta { display: block; margin: 16px 0; color: var(--vscode-textLink-foreground); font-size: 12px; }
+@media (max-width: 700px) { .settings-home-plugin-grid { grid-template-columns: 1fr; } .settings-home-plugin-toolbar { align-items: stretch; flex-direction: column; } .settings-home-plugin-search { width: 100%; } }
+
+.settings-home-toggle {
+	position: relative;
+	flex: 0 0 auto;
+	width: 34px;
+	height: 18px;
+	padding: 0;
+	border: 0;
+	border-radius: var(--vscode-cornerRadius-circle, 999px);
+	background: var(--vscode-inputOption-inactiveBackground, var(--vscode-disabledForeground));
+}
+
+.settings-home-toggle::after {
+	position: absolute;
+	top: 3px;
+	left: 3px;
+	width: 12px;
+	height: 12px;
+	border-radius: 50%;
+	background: var(--vscode-button-foreground);
+	content: '';
+	transition: transform 100ms ease-out;
+}
+
+.settings-home-toggle.checked {
+	background: var(--vscode-button-background);
+}
+
+.settings-home-toggle.checked::after { transform: translateX(16px); }
+
+@media (prefers-reduced-motion: reduce) {
+	.settings-home-toggle::after { transition: none; }
+}
+
+@media (max-width: 700px) {
+	.settings-home-content { grid-template-columns: 1fr; }
+	.settings-home-sidebar { display: none; }
+	.settings-home-main { padding: 32px 20px; }
+	.settings-home-row { align-items: flex-start; flex-wrap: wrap; }
+	.settings-home-select,
+	.settings-home-text { width: 100%; max-width: none; }
+}
+
+/* Keyboard Shortcuts UI in Settings */
+.settings-home-key-badge {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-width: 18px;
+	padding: 2px 6px;
+	font-family: var(--monaco-monospace-font, monospace);
+	font-size: 11px;
+	font-weight: 600;
+	line-height: 14px;
+	white-space: nowrap;
+	color: var(--vscode-keybindingLabel-foreground, #ffffff);
+	background-color: var(--vscode-keybindingLabel-background, rgba(255, 255, 255, 0.1));
+	border: 1px solid var(--vscode-keybindingLabel-border, rgba(255, 255, 255, 0.15));
+	border-bottom-color: var(--vscode-keybindingLabel-bottomBorder, rgba(255, 255, 255, 0.25));
+	border-radius: 4px;
+	box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+}
+
+.settings-home-key-badge-container {
+	display: inline-flex;
+	align-items: center;
+	white-space: nowrap;
+	gap: 4px;
+}
+
+.settings-home-source-badge {
+	display: inline-block;
+	padding: 2px 8px;
+	border-radius: 4px;
+	font-size: 11px;
+	font-weight: 500;
+	white-space: nowrap;
+	background: rgba(255, 255, 255, 0.06);
+	color: var(--vscode-descriptionForeground);
+}
+
+.settings-home-source-badge.source-user {
+	background: rgba(0, 122, 204, 0.2);
+	color: #4fc1ff;
+	border: 1px solid rgba(0, 122, 204, 0.4);
+}
+
+.settings-home-source-badge.source-extension {
+	background: rgba(186, 85, 211, 0.2);
+	color: #d8b4fe;
+	border: 1px solid rgba(186, 85, 211, 0.4);
+}
+
+.settings-home-source-badge.source-default {
+	background: rgba(255, 255, 255, 0.06);
+	color: var(--vscode-descriptionForeground);
+}
+
+.settings-home-keys-table {
+	width: 100%;
+	border-collapse: separate;
+	border-spacing: 0;
+	margin-top: 4px;
+}
+
+.settings-home-keys-table th {
+	text-align: left;
+	padding: 10px 14px;
+	font-size: 12px;
+	font-weight: 600;
+	color: var(--vscode-descriptionForeground);
+	border-bottom: 1px solid var(--vscode-widget-border, rgba(255, 255, 255, 0.1));
+	background: rgba(255, 255, 255, 0.02);
+	white-space: nowrap;
+}
+
+.settings-home-keys-table td {
+	padding: 10px 14px;
+	font-size: 13px;
+	vertical-align: middle;
+	border-bottom: 1px solid var(--vscode-widget-border, rgba(255, 255, 255, 0.05));
+}
+
+.settings-home-keys-table tr:hover td {
+	background-color: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.04));
+}
+
+/* Codex-style Keyboard Shortcuts List */
+.settings-home-codex-card {
+	border: 1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border, rgba(255, 255, 255, 0.1)));
+	border-radius: 12px;
+	background: var(--vscode-editorWidget-background, #181818);
+	overflow: hidden;
+}
+
+.settings-home-codex-list {
+	display: flex;
+	flex-direction: column;
+}
+
+.settings-home-codex-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 16px;
+	padding: 14px 20px;
+	border-bottom: 1px solid var(--vscode-widget-border, rgba(255, 255, 255, 0.06));
+	transition: background 0.12s ease-in-out;
+	cursor: pointer;
+}
+
+.settings-home-codex-row:last-child {
+	border-bottom: none;
+}
+
+.settings-home-codex-row:hover {
+	background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.04));
+}
+
+.settings-home-codex-info {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	min-width: 0;
+	flex: 1;
+}
+
+.settings-home-codex-title {
+	font-size: 14px;
+	font-weight: 600;
+	color: var(--vscode-foreground, #ffffff);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.settings-home-codex-desc {
+	font-size: 12px;
+	color: var(--vscode-descriptionForeground, rgba(255, 255, 255, 0.6));
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-family: var(--monaco-monospace-font, monospace);
+}
+
+.settings-home-codex-right {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	flex-shrink: 0;
+}
+
+.settings-home-codex-pill-group {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	flex-wrap: wrap;
+}
+
+.settings-home-codex-pill {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	padding: 4px 12px;
+	border-radius: 999px;
+	background: var(--vscode-badge-background, rgba(255, 255, 255, 0.1));
+	color: var(--vscode-badge-foreground, #ffffff);
+	font-family: var(--monaco-monospace-font, monospace);
+	font-size: 12px;
+	font-weight: 600;
+	letter-spacing: 0.02em;
+	border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.settings-home-codex-unassigned {
+	font-size: 13px;
+	color: var(--vscode-descriptionForeground, rgba(255, 255, 255, 0.5));
+	font-style: italic;
+	margin-right: 4px;
+}
+
+.settings-home-codex-action-btn {
+	display: grid;
+	place-items: center;
+	width: 30px;
+	height: 30px;
+	padding: 0;
+	border: 0;
+	border-radius: 6px;
+	background: transparent;
+	color: var(--vscode-icon-foreground, rgba(255, 255, 255, 0.6));
+	cursor: pointer;
+	transition: background 0.12s ease, color 0.12s ease;
+}
+
+.settings-home-codex-action-btn:hover {
+	background: var(--vscode-toolbar-hoverBackground, rgba(255, 255, 255, 0.1));
+	color: var(--vscode-foreground, #ffffff);
+}
+
+.settings-home-codex-action-btn.delete:hover {
+	background: rgba(244, 67, 54, 0.15);
+	color: #ff5252;
+}
+
+/* Settings Home Modal Dialog for Keybinding Editing */
+.settings-home-key-modal-overlay {
+	position: fixed;
+	top: 0;
+	left: 0;
+	width: 100vw;
+	height: 100vh;
+	background: rgba(0, 0, 0, 0.65);
+	backdrop-filter: blur(4px);
+	z-index: 99999;
+	display: grid;
+	place-items: center;
+}
+
+.settings-home-key-modal-dialog {
+	width: 90%;
+	max-width: 480px;
+	background: var(--vscode-editorWidget-background, #1e1e1e);
+	border: 1px solid var(--vscode-editorWidget-border, rgba(255, 255, 255, 0.15));
+	border-radius: 12px;
+	padding: 24px;
+	box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
+	display: flex;
+	flex-direction: column;
+	gap: 16px;
+}
+
+.settings-home-modal-title {
+	margin: 0;
+	font-size: 18px;
+	font-weight: 700;
+	color: var(--vscode-foreground, #ffffff);
+}
+
+.settings-home-modal-subtitle {
+	margin: 0;
+	font-size: 13px;
+	color: var(--vscode-descriptionForeground, rgba(255, 255, 255, 0.7));
+	font-family: var(--monaco-monospace-font, monospace);
+}
+
+.settings-home-key-capture-container {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
+.settings-home-key-capture-label {
+	font-size: 12px;
+	color: var(--vscode-descriptionForeground);
+}
+
+.settings-home-key-capture-input {
+	width: 100%;
+	padding: 12px 16px;
+	border-radius: 8px;
+	background: var(--vscode-input-background, #121212);
+	border: 1px solid var(--vscode-input-border, rgba(255, 255, 255, 0.2));
+	color: var(--vscode-input-foreground, #ffffff);
+	font-size: 14px;
+	font-weight: 600;
+	font-family: var(--monaco-monospace-font, monospace);
+	outline: none;
+	transition: border-color 0.15s ease;
+}
+
+.settings-home-key-capture-input:focus {
+	border-color: var(--vscode-focusBorder, #007acc);
+}
+
+.settings-home-modal-actions {
+	display: flex;
+	align-items: center;
+	justify-content: flex-end;
+	gap: 10px;
+	margin-top: 8px;
+}
+
+.settings-home-modal-btn {
+	padding: 8px 16px;
+	border-radius: 6px;
+	font-size: 13px;
+	font-weight: 600;
+	cursor: pointer;
+	border: none;
+	transition: opacity 0.15s ease, background 0.15s ease;
+}
+
+.settings-home-modal-btn.secondary {
+	background: rgba(255, 255, 255, 0.08);
+	color: var(--vscode-foreground, #ffffff);
+}
+
+.settings-home-modal-btn.secondary:hover {
+	background: rgba(255, 255, 255, 0.15);
+}
+
+.settings-home-modal-btn.primary {
+	background: var(--vscode-button-background, #007acc);
+	color: var(--vscode-button-foreground, #ffffff);
+}
+
+.settings-home-modal-btn.primary:hover {
+	background: var(--vscode-button-hoverBackground, #0062a3);
+}

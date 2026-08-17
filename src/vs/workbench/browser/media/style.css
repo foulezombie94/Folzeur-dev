@@ -1,0 +1,633 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+/* Animations */
+
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+/* Font Families (with CJK support) */
+
+@font-face {
+	font-family: "Geist";
+	font-style: normal;
+	font-weight: 100 900;
+	font-display: swap;
+	src: url("./geist-sans.woff2") format("woff2");
+}
+
+@font-face {
+	font-family: "Geist Mono";
+	font-style: normal;
+	font-weight: 100 900;
+	font-display: swap;
+	src: url("./geist-mono.woff2") format("woff2");
+}
+
+.monaco-workbench.mac { font-family: "Geist", -apple-system, BlinkMacSystemFont, sans-serif; }
+.monaco-workbench.mac:lang(zh-Hans) { font-family: "Geist", -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", sans-serif; }
+.monaco-workbench.mac:lang(zh-Hant) { font-family: "Geist", -apple-system, BlinkMacSystemFont, "PingFang TC", sans-serif; }
+.monaco-workbench.mac:lang(ja) { font-family: "Geist", -apple-system, BlinkMacSystemFont, "Hiragino Kaku Gothic Pro", sans-serif; }
+.monaco-workbench.mac:lang(ko) { font-family: "Geist", -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Nanum Gothic", "AppleGothic", sans-serif; }
+
+.monaco-workbench.windows { font-family: "Geist", "Segoe WPC", "Segoe UI", sans-serif; }
+.monaco-workbench.windows:lang(zh-Hans) { font-family: "Geist", "Segoe WPC", "Segoe UI", "Microsoft YaHei", sans-serif; }
+.monaco-workbench.windows:lang(zh-Hant) { font-family: "Geist", "Segoe WPC", "Segoe UI", "Microsoft Jhenghei", sans-serif; }
+.monaco-workbench.windows:lang(ja) { font-family: "Geist", "Segoe WPC", "Segoe UI", "Yu Gothic UI", "Meiryo UI", sans-serif; }
+.monaco-workbench.windows:lang(ko) { font-family: "Geist", "Segoe WPC", "Segoe UI", "Malgun Gothic", "Dotom", sans-serif; }
+
+/* Linux: add `system-ui` as the first fallback and not `Ubuntu` to allow other distributions to pick their standard OS font. */
+.monaco-workbench.linux { font-family: "Geist", system-ui, "Ubuntu", "Droid Sans", sans-serif; }
+.monaco-workbench.linux:lang(zh-Hans) { font-family: "Geist", system-ui, "Ubuntu", "Droid Sans", "Source Han Sans SC", "Source Han Sans CN", "Source Han Sans", sans-serif; }
+.monaco-workbench.linux:lang(zh-Hant) { font-family: "Geist", system-ui, "Ubuntu", "Droid Sans", "Source Han Sans TC", "Source Han Sans TW", "Source Han Sans", sans-serif; }
+.monaco-workbench.linux:lang(ja) { font-family: "Geist", system-ui, "Ubuntu", "Droid Sans", "Source Han Sans J", "Source Han Sans JP", "Source Han Sans", sans-serif; }
+.monaco-workbench.linux:lang(ko) { font-family: "Geist", system-ui, "Ubuntu", "Droid Sans", "Source Han Sans K", "Source Han Sans JR", "Source Han Sans", "UnDotum", "FBaekmuk Gulim", sans-serif; }
+
+.monaco-workbench.mac { --monaco-monospace-font: "Geist Mono", "SF Mono", Monaco, Menlo, Courier, monospace; }
+.monaco-workbench.windows { --monaco-monospace-font: "Geist Mono", Consolas, "Courier New", monospace; }
+.monaco-workbench.linux { --monaco-monospace-font: "Geist Mono", "Ubuntu Mono", "Liberation Mono", "DejaVu Sans Mono", "Courier New", monospace; }
+
+/* Global Styles */
+
+body {
+	height: 100%;
+	width: 100%;
+	margin: 0;
+	padding: 0;
+	overflow: hidden;
+	font-size: 11px;
+	user-select: none;
+	-webkit-user-select: none;
+	font-family: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+}
+
+.monaco-workbench {
+	font-size: 13px;
+	line-height: 1.4em;
+	font-family: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+	position: relative;
+	inset: 0;
+	z-index: 1;
+	overflow: hidden;
+	color: var(--vscode-foreground);
+
+	/* Strict Monochrome Black & White Palette -- ABSOLUTELY ZERO FLUO GREEN */
+	--vscode-editor-background: #000000 !important;
+	--vscode-editor-foreground: #ffffff !important;
+	--vscode-sideBar-background: #000000 !important;
+	--vscode-sideBar-foreground: #ffffff !important;
+	--vscode-sideBarTitle-foreground: #ffffff !important;
+	--vscode-sideBarSectionHeader-background: #080808 !important;
+	--vscode-sideBarSectionHeader-foreground: #ffffff !important;
+	--vscode-activityBar-background: #000000 !important;
+	--vscode-activityBar-foreground: #ffffff !important;
+	--vscode-activityBar-inactiveForeground: #888888 !important;
+	--vscode-activityBar-activeBorder: #ffffff !important;
+	--vscode-activityBar-activeBackground: #111111 !important;
+	--vscode-titleBar-activeBackground: #000000 !important;
+	--vscode-titleBar-inactiveBackground: #000000 !important;
+	--vscode-titleBar-activeForeground: #ffffff !important;
+	--vscode-titleBar-inactiveForeground: #888888 !important;
+	--vscode-editorWidget-background: #0a0a0a !important;
+	--vscode-menu-background: #0a0a0a !important;
+	--vscode-input-background: #050505 !important;
+	--vscode-input-foreground: #ffffff !important;
+	--vscode-input-border: #333333 !important;
+	--vscode-inputOption-activeBorder: #ffffff !important;
+	--vscode-panel-border: #222222 !important;
+	--vscode-widget-border: #222222 !important;
+	--vscode-foreground: #ffffff !important;
+	--vscode-icon-foreground: #ffffff !important;
+	--vscode-menu-foreground: #ffffff !important;
+	--vscode-menu-selectionForeground: #ffffff !important;
+	--vscode-menu-selectionBackground: #1a1a1a !important;
+	--vscode-descriptionForeground: #aaaaaa !important;
+	--vscode-focusBorder: #ffffff !important;
+	--vscode-contrastActiveBorder: #ffffff !important;
+	--vscode-textLink-foreground: #ffffff !important;
+	--vscode-button-background: #ffffff !important;
+	--vscode-button-foreground: #000000 !important;
+	--vscode-button-hoverBackground: #e0e0e0 !important;
+	--vscode-button-secondaryBackground: #1a1a1a !important;
+	--vscode-button-secondaryForeground: #ffffff !important;
+	--vscode-button-secondaryHoverBackground: #333333 !important;
+	--vscode-list-hoverBackground: #111111 !important;
+	--vscode-list-activeSelectionBackground: #1a1a1a !important;
+	--vscode-list-activeSelectionForeground: #ffffff !important;
+	--vscode-tab-activeBackground: #050505 !important;
+	--vscode-tab-inactiveBackground: #000000 !important;
+	--vscode-tab-activeBorder: #ffffff !important;
+	--vscode-tab-activeBorderTop: #ffffff !important;
+	--vscode-tab-selectedBorderTop: #ffffff !important;
+	--vscode-tab-hoverBorder: #ffffff !important;
+	--vscode-tab-unfocusedActiveBorder: #ffffff !important;
+	--vscode-tab-unfocusedActiveBorderTop: #ffffff !important;
+	--vscode-editorGroupHeader-tabsBackground: #000000 !important;
+	--vscode-terminal-background: #000000 !important;
+	--vscode-terminal-foreground: #ffffff !important;
+	--vscode-selection-background: #ffffff !important;
+	--vscode-selection-foreground: #000000 !important;
+
+	/* Agent-window tokens: pure monochrome */
+	--vscode-agents-background: #000000 !important;
+	--vscode-agentsPanel-background: #000000 !important;
+	--vscode-agentsPanel-foreground: #ffffff !important;
+	--vscode-agentsPanel-border: #333333 !important;
+	--vscode-agentsGradient-tintColor: #ffffff !important;
+	--vscode-agentsChatInput-background: #050505 !important;
+	--vscode-agentsChatInput-foreground: #ffffff !important;
+	--vscode-agentsChatInput-placeholderForeground: #888888 !important;
+	--vscode-agentsChatInput-border: #333333 !important;
+	--vscode-agentsChatInput-focusBorder: #ffffff !important;
+	--vscode-agentsNewSessionButton-background: #ffffff !important;
+	--vscode-agentsNewSessionButton-foreground: #000000 !important;
+	--vscode-agentsNewSessionButton-border: #ffffff !important;
+	--vscode-agentsNewSessionButton-hoverBackground: #e0e0e0 !important;
+	--vscode-agentsUnreadBadge-background: #ffffff !important;
+	--vscode-agentsUnreadBadge-foreground: #000000 !important;
+	--vscode-agentsVoice-speakingForeground: #ffffff !important;
+
+	/* Zero Green Accents -- All status indicators forced white / grayscale */
+	--vscode-editorLineNumber-foreground: #555555 !important;
+	--vscode-editorLineNumber-activeForeground: #ffffff !important;
+	--vscode-panelTitle-activeForeground: #ffffff !important;
+	--vscode-panelTitle-inactiveForeground: #888888 !important;
+	--vscode-panelTitle-activeBorder: #ffffff !important;
+	--vscode-sideBarSectionHeader-background: #080808 !important;
+	--vscode-sideBarSectionHeader-foreground: #ffffff !important;
+	--vscode-sideBarTitle-foreground: #ffffff !important;
+	--vscode-sideBarTitle-background: #000000 !important;
+	--vscode-panelTitle-foreground: #ffffff !important;
+	--vscode-statusBarItem-hoverBackground: #171717 !important;
+	--vscode-activityBarBadge-background: #ffffff !important;
+	--vscode-activityBarBadge-foreground: #000000 !important;
+	--vscode-progressBar-background: #ffffff !important;
+	--vscode-charts-green: #ffffff !important;
+	--vscode-charts-blue: #ffffff !important;
+	--vscode-testing-iconPassed: #ffffff !important;
+	--vscode-gitDecoration-addedResourceForeground: #ffffff !important;
+	--vscode-gitDecoration-modifiedResourceForeground: #aaaaaa !important;
+	--vscode-terminal-ansiGreen: #ffffff !important;
+	--vscode-terminal-ansiBrightGreen: #ffffff !important;
+	--vscode-statusBar-foreground: #ffffff !important;
+	--vscode-statusBar-background: #000000 !important;
+	--vscode-statusBar-border: #222222 !important;
+	--vscode-statusBarItem-remoteForeground: #ffffff !important;
+	--vscode-statusBarItem-remoteBackground: #000000 !important;
+	--vscode-statusBarItem-prominentBackground: #000000 !important;
+	--vscode-statusBarItem-prominentForeground: #ffffff !important;
+
+	/* Command Center Search & Layout Controls */
+	--vscode-commandCenter-foreground: #ffffff !important;
+	--vscode-commandCenter-activeForeground: #ffffff !important;
+	--vscode-commandCenter-inactiveForeground: #888888 !important;
+	--vscode-commandCenter-background: #050505 !important;
+	--vscode-commandCenter-activeBackground: #111111 !important;
+	--vscode-commandCenter-border: #333333 !important;
+	--vscode-commandCenter-activeBorder: #ffffff !important;
+	--vscode-commandCenter-inactiveBorder: #222222 !important;
+
+	--monaco-monospace-font: "Geist Mono", "Cascadia Code", "Fira Code", Consolas, monospace !important;
+}
+
+/* Force all green text, borders, and icons across workbench to pure white */
+.monaco-workbench [style*="color: rgb(0, 229, 117)"],
+.monaco-workbench [style*="color: rgb(2, 219, 117)"],
+.monaco-workbench [style*="color: #00e575"],
+.monaco-workbench [style*="color: #02db75"],
+.monaco-workbench [style*="color: #00ff00"],
+.monaco-workbench [style*="color: green"],
+.monaco-workbench .statusbar-item .codicon,
+.monaco-workbench .statusbar-item a,
+.monaco-workbench .statusbar-item {
+	color: #ffffff !important;
+}
+
+.monaco-workbench [style*="border-color: rgb(0, 229, 117)"],
+.monaco-workbench [style*="border-color: #00e575"],
+.monaco-workbench [style*="border-color: #00ff00"] {
+	border-color: #ffffff !important;
+}
+
+/* Sidebar Title & EXPLORER Header: Pure White */
+.monaco-workbench .part.sidebar .title-label,
+.monaco-workbench .part.sidebar .title-label h2,
+.monaco-workbench .part.sidebar .composite.header,
+.monaco-workbench .part.sidebar .sidebar-title,
+.monaco-workbench .part.sidebar h2,
+.monaco-workbench .part.sidebar .title-header {
+	color: #ffffff !important;
+}
+
+/* Command Center Search Box: Clean White/Gray Border & Icons */
+.monaco-workbench .part.titlebar .command-center .action-item.command-center-center {
+	border-color: #333333 !important;
+	background-color: #050505 !important;
+	color: #ffffff !important;
+}
+
+.monaco-workbench .part.titlebar .command-center .search-icon,
+.monaco-workbench .part.titlebar .command-center .search-label {
+	color: #ffffff !important;
+}
+
+/* Top-Right TitleBar Window Controls & Layout Toolbar Icons: Pure White */
+.monaco-workbench .part.titlebar .window-controls-container .window-icon,
+.monaco-workbench .part.titlebar .window-controls-container .window-icon::before,
+.monaco-workbench .part.titlebar .window-controls-container .window-minimize,
+.monaco-workbench .part.titlebar .window-controls-container .window-maximize,
+.monaco-workbench .part.titlebar .window-controls-container .window-unmaximize,
+.monaco-workbench .part.titlebar .window-controls-container .window-close,
+.monaco-workbench .part.titlebar .action-toolbar-container .codicon,
+.monaco-workbench .part.titlebar .codicon {
+	color: #ffffff !important;
+	stroke: #ffffff !important;
+	fill: #ffffff !important;
+}
+
+.monaco-workbench .part.titlebar .window-controls-container .window-icon svg,
+.monaco-workbench .part.titlebar .window-controls-container .window-icon svg path,
+.monaco-workbench .part.titlebar .window-controls-container .window-icon svg rect,
+.monaco-workbench .part.titlebar .window-controls-container .window-icon svg line,
+.monaco-workbench .part.titlebar .window-controls-container .window-icon svg polygon {
+	stroke: #ffffff !important;
+	fill: #ffffff !important;
+	color: #ffffff !important;
+}
+
+/* Panel Input Box & Filter (Problems / Terminal / Output Filter) */
+.monaco-workbench .monaco-inputbox,
+.monaco-workbench .monaco-inputbox.synthetic-focus,
+.monaco-workbench .monaco-inputbox:focus-within,
+.monaco-workbench .monaco-filter-input,
+.monaco-workbench .part.panel .monaco-inputbox,
+.monaco-workbench .part.panel input {
+	border-color: #333333 !important;
+	outline-color: #ffffff !important;
+	box-shadow: none !important;
+}
+
+/* Terminal ANSI Green & Terminal Cursor: Pure White */
+.monaco-workbench .terminal .xterm-rows span[style*="color: rgb(0, 2"],
+.monaco-workbench .terminal .xterm-rows span[style*="color: rgb(0, 255, 0)"],
+.monaco-workbench .terminal .xterm-rows span[style*="color: #00ff00"],
+.monaco-workbench .terminal .xterm-rows span[style*="color: green"],
+.monaco-workbench .terminal .xterm-rows .xterm-style-2,
+.monaco-workbench .terminal .xterm-rows .xterm-style-10 {
+	color: #ffffff !important;
+}
+
+.monaco-workbench .terminal .xterm-cursor-layer .xterm-cursor,
+.monaco-workbench .terminal .xterm-cursor-layer .xterm-cursor-block,
+.monaco-workbench .terminal .xterm-cursor-layer .xterm-cursor-outline,
+.monaco-workbench .terminal .xterm-cursor-layer .xterm-cursor-underline,
+.monaco-workbench .terminal .xterm-cursor-layer .xterm-cursor-bar {
+	outline-color: #ffffff !important;
+	border-color: #ffffff !important;
+	background-color: #ffffff !important;
+	color: #000000 !important;
+}
+
+/* All panel, titlebar, and statusbar borders: subtle dark gray */
+.monaco-workbench .part.titlebar,
+.monaco-workbench .part.panel,
+.monaco-workbench .part.statusbar,
+.monaco-workbench .part.sidebar,
+.monaco-workbench .part.activitybar {
+	border-color: #222222 !important;
+}
+
+
+
+/* Typography Overrides for Geist & Geist Mono */
+.monaco-workbench,
+.monaco-workbench .part,
+.monaco-workbench .titlebar,
+.monaco-workbench .sidebar,
+.monaco-workbench .statusbar,
+.monaco-workbench .panel,
+.monaco-workbench input,
+.monaco-workbench button,
+.monaco-workbench textarea {
+	font-family: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+}
+
+.monaco-editor,
+.monaco-editor .view-lines,
+.monaco-workbench .terminal,
+.monaco-workbench code,
+.monaco-workbench pre {
+	font-family: "Geist Mono", "Cascadia Code", "Fira Code", Consolas, monospace !important;
+}
+
+/* Shared control finish: bright, legible white controls against the dark canvas. */
+.monaco-workbench .monaco-button:not(.secondary) {
+	background: #000000 !important;
+	border-color: #ffffff !important;
+	color: #ffffff !important;
+}
+
+.monaco-workbench .monaco-button:not(.secondary):hover {
+	background: #171717 !important;
+	border-color: #ffffff !important;
+}
+
+.monaco-workbench .monaco-button.secondary {
+	background: #000000 !important;
+	border-color: #ffffff !important;
+	color: #ffffff !important;
+}
+
+.monaco-workbench .monaco-button.secondary:hover,
+.monaco-workbench .action-item:hover .action-label {
+	background: #171717 !important;
+}
+
+/* Disable panel/part shadows when the setting is off (preserves floating modals, notifications, etc.) */
+.monaco-workbench.no-shadows .part.titlebar,
+.monaco-workbench.no-shadows .part.activitybar,
+.monaco-workbench.no-shadows.nosidebar .part.activitybar,
+.monaco-workbench.no-shadows.activitybar-right .part.activitybar,
+.monaco-workbench.no-shadows .part.editor .tabs-container > .tab {
+	box-shadow: none;
+}
+.monaco-workbench.no-shadows .part.editor .tabs-container > .tab:hover:not(.active),
+.monaco-workbench.no-shadows .part.editor .tabs-container > .tab.active {
+	box-shadow: none;
+}
+.monaco-workbench.no-shadows {
+	/* Use zero-offset transparent shadows instead of 'none' because these
+	 * variables are interpolated into multi-value box-shadow declarations. */
+	--vscode-shadow-active-tab: 0 0 0 0 transparent;
+	--vscode-shadow-depth-x: 0 0 0 0 transparent;
+	--vscode-shadow-depth-y: 0 0 0 0 transparent;
+	--vscode-shadow-sm: 0 0 0 0 transparent;
+}
+
+.monaco-workbench.web {
+	touch-action: none; /* Disable browser handling of all panning and zooming gestures. Removes 300ms touch delay. */
+	overscroll-behavior: none; /* Prevent bounce effect */
+}
+
+.monaco-workbench.border:not(.fullscreen) {
+	box-sizing: border-box;
+	border: 1px solid var(--window-border-color);
+}
+
+.monaco-workbench.border.mac {
+	border-radius: 10px;
+}
+
+.monaco-workbench.border.mac.macos-tahoe {
+	border-radius: 16px; /* macOS Tahoe increased rounded corners size */
+}
+
+.monaco-workbench img {
+	border: 0;
+}
+
+.monaco-workbench label {
+	cursor: pointer;
+}
+
+.monaco-workbench a {
+	text-decoration: none;
+}
+
+
+.monaco-workbench p > a {
+	text-decoration: var(--text-link-decoration);
+}
+
+.monaco-workbench.underline-links {
+	--text-link-decoration: underline;
+}
+
+.monaco-workbench.hc-black p > a,
+.monaco-workbench.hc-light p > a {
+	text-decoration: underline !important;
+}
+
+.monaco-workbench a:active {
+	color: inherit;
+	background-color: inherit;
+}
+
+.monaco-workbench a.plain {
+	color: inherit;
+	text-decoration: none;
+}
+
+.monaco-workbench a.plain:hover,
+.monaco-workbench a.plain.hover {
+	color: inherit;
+	text-decoration: none;
+}
+
+.monaco-workbench input {
+	color: inherit;
+	font-family: inherit;
+	font-size: 100%;
+}
+
+.monaco-workbench table {
+	/*
+	 * Somehow this is required when tables show in floating windows
+	 * to override the user-agent style which sets a specific color
+	 * and font-size
+	 */
+	color: inherit;
+	font-size: inherit;
+}
+
+.monaco-workbench input::placeholder { color: var(--vscode-input-placeholderForeground); }
+.monaco-workbench input::-webkit-input-placeholder  { color: var(--vscode-input-placeholderForeground); }
+.monaco-workbench input::-moz-placeholder { color: var(--vscode-input-placeholderForeground); }
+
+.monaco-workbench textarea::placeholder { color: var(--vscode-input-placeholderForeground); }
+.monaco-workbench textarea::-webkit-input-placeholder { color: var(--vscode-input-placeholderForeground); }
+.monaco-workbench textarea::-moz-placeholder { color: var(--vscode-input-placeholderForeground); }
+
+.monaco-workbench .pointer {
+	cursor: pointer;
+}
+
+.monaco-workbench.mac.monaco-font-aliasing-antialiased {
+	-webkit-font-smoothing: antialiased;
+	-moz-osx-font-smoothing: grayscale;
+}
+
+.monaco-workbench.mac.monaco-font-aliasing-none {
+	-webkit-font-smoothing: none;
+	-moz-osx-font-smoothing: unset;
+}
+
+@media (-webkit-min-device-pixel-ratio: 2), (min-resolution: 192dpi) {
+	.monaco-workbench.mac.monaco-font-aliasing-auto {
+		-webkit-font-smoothing: antialiased;
+		-moz-osx-font-smoothing: grayscale;
+	}
+}
+
+.monaco-workbench .context-view {
+	-webkit-app-region: no-drag;
+}
+
+.monaco-workbench .codicon {
+	color: var(--vscode-icon-foreground);
+}
+
+.monaco-workbench .codicon[class*='codicon-'] {
+	font-size: 16px; /* sets font-size for codicons in workbench (https://github.com/microsoft/vscode/issues/98495) */
+}
+
+.monaco-workbench .predefined-file-icon[class*='codicon-']::before {
+	width: 16px;
+	padding-left: 3px; /* width (16px) - font-size (13px) = padding-left (3px) */
+	padding-right: 3px;
+}
+
+.predefined-file-icon::before { /* do add additional specificity to this selector, so it can be overridden by product themes */
+	font-family: 'codicon';
+}
+
+.monaco-workbench:not(.file-icons-enabled) .predefined-file-icon[class*='codicon-']::before {
+	content: unset !important;
+}
+
+.monaco-workbench.modal-dialog-visible .monaco-progress-container.infinite .progress-bit {
+	display: none; /* stop progress animations when dialogs are visible (https://github.com/microsoft/vscode/issues/138396) */
+}
+
+/* Custom Dropdown (select) Arrows */
+
+.monaco-workbench select {
+	font-family: inherit;
+	appearance: none;
+	-webkit-appearance: none;
+	-moz-appearance: none;
+	/* Hides inner border from FF */
+	border: 1px solid;
+}
+
+.monaco-workbench .select-container {
+	position: relative;
+}
+
+.monaco-workbench .select-container:after {
+	content: var(--vscode-icon-chevron-down-content);
+	font-family: var(--vscode-icon-chevron-down-font-family);
+	font-size: 16px;
+	width: 16px;
+	height: 16px;
+	line-height: 16px;
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	right: 4px;
+	margin: auto;
+	pointer-events: none;
+}
+
+/* Keyboard Focus Indication Styles */
+
+.monaco-workbench [tabindex="0"]:focus,
+.monaco-workbench [tabindex="-1"]:focus,
+.monaco-workbench .synthetic-focus,
+.monaco-workbench select:focus,
+.monaco-workbench input[type="button"]:focus,
+.monaco-workbench input[type="text"]:focus,
+.monaco-workbench button:focus,
+.monaco-workbench textarea:focus,
+.monaco-workbench input[type="search"]:focus,
+.monaco-workbench input[type="checkbox"]:focus {
+	outline-width: 1px;
+	outline-style: solid;
+	outline-offset: -1px;
+	outline-color: var(--vscode-focusBorder);
+	opacity: 1;
+}
+
+.monaco-workbench.hc-black .synthetic-focus input,
+.monaco-workbench.hc-light .synthetic-focus input {
+	background: transparent; /* Search input focus fix when in high contrast */
+}
+
+.monaco-workbench input[type="checkbox"]:focus {
+	outline-offset: 2px;
+}
+
+.monaco-workbench [tabindex="0"]:active,
+.monaco-workbench [tabindex="-1"]:active,
+.monaco-workbench select:active,
+.monaco-workbench input[type="button"]:active,
+.monaco-workbench input[type="checkbox"]:active {
+	outline: 0 !important; /* fixes some flashing outlines from showing up when clicking */
+}
+
+.monaco-workbench.mac select:focus {
+	border-color: transparent; /* outline is a square, but border has a radius, so we avoid this glitch when focused (https://github.com/microsoft/vscode/issues/26045) */
+}
+
+.monaco-workbench.hc-black .monaco-list:not(.element-focused):not(:active):focus:before,
+.monaco-workbench.hc-light .monaco-list:not(.element-focused):not(:active):focus:before {
+	position: absolute;
+	top: 0;
+	left: 0;
+	width: 100%;
+	height: 100%;
+	z-index: 15; /* make sure we are on top of the tree sticky scroll widget */
+	content: "";
+	pointer-events: none; /* enable click through */
+	outline: 1px solid; /* we still need to handle the empty tree or no focus item case */
+	outline-width: 1px;
+	outline-style: solid;
+	outline-offset: -1px;
+	outline-color: var(--vscode-focusBorder);
+}
+
+.monaco-workbench .monaco-list:not(:focus) .monaco-list-row.focused .monaco-highlighted-label .highlight,
+.monaco-workbench .monaco-list .monaco-list-row .monaco-highlighted-label .highlight {
+	color: var(--vscode-list-highlightForeground);
+}
+
+.monaco-workbench .monaco-list .monaco-list-row.focused .monaco-highlighted-label .highlight {
+	color: var(--vscode-list-focusHighlightForeground);
+}
+
+.monaco-workbench .synthetic-focus :focus {
+	outline: 0 !important; /* elements within widgets that draw synthetic-focus should never show focus */
+}
+
+.monaco-workbench .monaco-inputbox.info.synthetic-focus,
+.monaco-workbench .monaco-inputbox.warning.synthetic-focus,
+.monaco-workbench .monaco-inputbox.error.synthetic-focus,
+.monaco-workbench .monaco-inputbox.info input[type="text"]:focus,
+.monaco-workbench .monaco-inputbox.warning input[type="text"]:focus,
+.monaco-workbench .monaco-inputbox.error input[type="text"]:focus {
+	outline: 0 !important; /* outline is not going well with decoration */
+}
+
+.monaco-workbench .monaco-list:focus {
+	outline: 0 !important; /* tree indicates focus not via outline but through the focused item */
+}
+
+.monaco-workbench a.monaco-link:hover {
+	text-decoration: underline; /* render underline on hover for accessibility requirements */
+}
+
+.monaco-workbench .monaco-action-bar:not(.vertical) .action-label:not(.disabled):hover,
+.monaco-workbench .monaco-action-bar:not(.vertical) .monaco-dropdown-with-primary:not(.disabled):hover {
+	background-color: var(--vscode-toolbar-hoverBackground);
+}
+
+.monaco-workbench .monaco-action-bar:not(.vertical) .action-item.active .action-label:not(.disabled),
+.monaco-workbench .monaco-action-bar:not(.vertical) .monaco-dropdown.active .action-label:not(.disabled) {
+	background-color: var(--vscode-toolbar-activeBackground);
+}
+
+.monaco-workbench .monaco-action-bar:not(.vertical) .action-item .action-label:hover:not(.disabled) {
+	outline: 1px dashed var(--vscode-toolbar-hoverOutline);
+	outline-offset: -1px;
+}

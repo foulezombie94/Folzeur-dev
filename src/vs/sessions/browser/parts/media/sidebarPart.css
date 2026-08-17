@@ -1,0 +1,283 @@
+@import '../../../workbench/contrib/preferences/browser/media/appicaRuntime.css';
+
+.agent-sessions-workbench .part.sidebar > .composite.title {
+	position: relative;
+}
+
+.agent-sessions-workbench {
+	--appica-agent-sans: "Geist", sans-serif;
+	--appica-agent-mono: "Geist Mono", monospace;
+	--vscode-focusBorder: #ffffff;
+	--vscode-textLink-foreground: #ffffff;
+	--vscode-agentsChatInput-border: rgba(255, 255, 255, 0.12);
+	--vscode-agentsChatInput-focusBorder: rgba(255, 255, 255, 0.25);
+	--vscode-input-border: rgba(255, 255, 255, 0.12);
+	--vscode-button-background: #000000;
+	--vscode-button-foreground: #ffffff;
+	--vscode-button-hoverBackground: #171717;
+	--vscode-button-secondaryBackground: #000000;
+	--vscode-button-secondaryForeground: #ffffff;
+	--vscode-button-secondaryHoverBackground: #171717;
+	--vscode-activityBar-foreground: #ffffff;
+	--vscode-activityBar-inactiveForeground: #ffffff;
+	--vscode-icon-foreground: #ffffff;
+	background: #000000;
+}
+
+.agent-sessions-workbench .part.sidebar > .composite.title > .titlebar-drag-region {
+	top: 0;
+	left: 0;
+	display: block;
+	position: absolute;
+	width: 100%;
+	height: 100%;
+	-webkit-app-region: drag;
+}
+
+/* Interactive elements in the title area must not be draggable */
+.agent-sessions-workbench .part.sidebar > .composite.title .action-item {
+	-webkit-app-region: no-drag;
+}
+
+/* Toggled state for the sidebar toggle button in the sidebar title area */
+.agent-sessions-workbench .part.sidebar > .composite.title > .global-actions-left .action-label.checked {
+	background: var(--vscode-toolbar-activeBackground);
+	border-radius: var(--vscode-cornerRadius-small);
+}
+
+/* Preserve toggled background when the toggle button is hovered or focused */
+.agent-sessions-workbench .part.sidebar > .composite.title > .global-actions-left .action-label.checked:hover,
+.agent-sessions-workbench .part.sidebar > .composite.title > .global-actions-left .action-label.checked:focus {
+	background: var(--vscode-toolbar-activeBackground);
+}
+/* Sidebar Footer Container */
+.agent-sessions-workbench .part.sidebar > .sidebar-footer {
+	display: flex;
+	flex-direction: column;
+	align-items: stretch;
+	gap: 4px;
+	padding: 6px 0 0 0;
+	margin: 0 10px 2px 10px;
+	flex-shrink: 0;
+}
+
+.agent-sessions-workbench .part.sidebar > .sidebar-footer .appica-sidebar-account-row {
+	order: 2;
+	box-sizing: border-box;
+	min-height: 42px;
+	width: 100%;
+	margin-top: 6px;
+	padding: 6px 8px;
+	border-top: 1px solid var(--vscode-widget-border, var(--vscode-editorWidget-border, transparent));
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex: 0 0 auto;
+	cursor: pointer;
+	border-radius: 6px;
+	transition: background 0.15s ease-in-out;
+}
+
+.agent-sessions-workbench .part.sidebar > .sidebar-footer .appica-sidebar-account-row:hover {
+	background: var(--vscode-toolbar-hoverBackground, rgba(255, 255, 255, 0.12));
+}
+
+.agent-sessions-workbench .appica-sidebar-account-avatar {
+	width: 22px;
+	height: 22px;
+	flex: 0 0 auto;
+	display: grid;
+	place-items: center;
+	border-radius: 50%;
+	background: #000000 !important;
+	color: #ffffff !important;
+	font-size: 10px;
+	font-weight: 600;
+}
+
+.agent-sessions-workbench .appica-sidebar-account-name {
+	min-width: 0;
+	flex: 1 1 auto;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	color: var(--vscode-foreground, #ffffff) !important;
+	font-family: var(--appica-agent-sans) !important;
+	font-size: 13px;
+	font-weight: 500;
+}
+
+/* Custom Native Account Popup Menu (ChatGPT/Codex Style) */
+.appica-custom-account-popup {
+	min-width: 250px;
+	max-width: 290px;
+	background: var(--vscode-menu-background, #252526);
+	color: var(--vscode-menu-foreground, #cccccc);
+	border: 1px solid var(--vscode-menu-border, var(--vscode-widget-border, rgba(255, 255, 255, 0.15)));
+	border-radius: 12px;
+	box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+	padding: 6px;
+	font-family: var(--appica-agent-sans) !important;
+	font-size: 13px;
+	user-select: none;
+	animation: appicaPopupFadeIn 0.15s ease-out;
+}
+
+@keyframes appicaPopupFadeIn {
+	from { opacity: 0; transform: translateY(4px); }
+	to { opacity: 1; transform: translateY(0); }
+}
+
+.appica-custom-account-popup-header {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 8px 10px 10px 10px;
+	font-weight: 600;
+	font-size: 14px;
+	color: var(--vscode-menu-foreground, #ffffff);
+}
+
+.appica-custom-account-popup-header-name {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.appica-custom-account-popup-divider {
+	height: 1px;
+	background: var(--vscode-menu-separatorBackground, var(--vscode-widget-border, rgba(255, 255, 255, 0.1)));
+	margin: 4px 0;
+}
+
+.appica-custom-account-popup-item {
+	display: flex;
+	align-items: center;
+	padding: 8px 10px;
+	border-radius: 6px;
+	cursor: pointer;
+	color: var(--vscode-menu-foreground, #cccccc);
+	transition: background 0.10s ease-in-out;
+}
+
+.appica-custom-account-popup-item:hover:not(.disabled) {
+	background: var(--vscode-menu-selectionBackground, rgba(255, 255, 255, 0.1));
+	color: var(--vscode-menu-selectionForeground, #ffffff);
+}
+
+.appica-custom-account-popup-item.disabled {
+	opacity: 0.6;
+	cursor: default;
+}
+
+.appica-custom-account-popup-muted {
+	color: var(--vscode-descriptionForeground, rgba(255, 255, 255, 0.5));
+	margin-left: 4px;
+}
+
+.appica-account-popup-header {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 8px 12px;
+}
+
+.appica-account-popup-header-info {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+}
+
+.appica-account-popup-header-name {
+	font-weight: 600;
+	font-size: 13px;
+	color: var(--vscode-foreground, #fff);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.appica-account-popup-header-email {
+	font-size: 11px;
+	color: var(--vscode-descriptionForeground, rgba(255, 255, 255, 0.6));
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/* Make the toolbar fill the footer width and stack actions vertically */
+.monaco-workbench .part.sidebar > .sidebar-footer .monaco-toolbar,
+.monaco-workbench .part.sidebar > .sidebar-footer .monaco-action-bar,
+
+.monaco-workbench .part.sidebar > .sidebar-footer .actions-container {
+	width: 100%;
+	max-width: 100%;
+	display: flex;
+	flex-direction: column;
+	align-items: stretch;
+	cursor: default;
+}
+
+.monaco-workbench .part.sidebar > .sidebar-footer .action-item {
+	width: 100%;
+	max-width: 100%;
+	cursor: default;
+}
+
+/* ---- Phone Layout: Sidebar Drawer Overlay ---- */
+
+/* On phone, the sidebar is a full-width drawer that slides over the chat.
+	It covers the full viewport below the mobile top bar; the top bar's
+	sidebar toggle button remains visible and is used to dismiss it.
+
+	The drawer slides in/out with a transition (not a keyframe animation) so
+	that interrupted toggles retarget smoothly from the current position
+	rather than restarting. The split-view wrapper toggles `display: none`
+	via a `.visible` class; `transition-behavior: allow-discrete` defers
+	the discrete `display` change until the slide-out completes, and
+	`@starting-style` provides the offscreen origin for the slide-in. */
+.agent-sessions-workbench.phone-layout .split-view-view:has(> .part.sidebar) {
+	position: absolute !important;
+	top: 0 !important;
+	left: 0 !important;
+	bottom: 0 !important;
+	width: 100% !important;
+	height: 100% !important;
+	z-index: 250;
+	transform: translateX(0);
+	transition:
+		transform 260ms cubic-bezier(0.32, 0.72, 0, 1),
+		display 260ms allow-discrete;
+}
+
+/* Slide-in starting state (applies on each transition into .visible) */
+@starting-style {
+	.agent-sessions-workbench.phone-layout .split-view-view.visible:has(> .part.sidebar) {
+		transform: translateX(-100%);
+	}
+}
+
+/* Slide-out target: when `.visible` is removed, splitview's own rule sets
+	`display: none`. With `allow-discrete` above, the transform animates first
+	and the discrete `display` swap happens at the end of the transition. */
+.agent-sessions-workbench.phone-layout .split-view-view:not(.visible):has(> .part.sidebar) {
+	transform: translateX(-100%);
+}
+
+/* The sidebar Part inside fills its container */
+.agent-sessions-workbench.phone-layout .part.sidebar {
+	width: 100%;
+	height: 100%;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.agent-sessions-workbench.phone-layout .split-view-view:has(> .part.sidebar) {
+		transition: none;
+	}
+}
+
+/* Increase sidebar footer action button height for touch */
+.agent-sessions-workbench.phone-layout .part.sidebar > .sidebar-footer .sidebar-action-button {
+	min-height: 44px;
+	padding: 8px 12px;
+}

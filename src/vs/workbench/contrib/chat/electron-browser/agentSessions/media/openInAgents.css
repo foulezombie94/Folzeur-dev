@@ -1,0 +1,42 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+/* "Open in Agents" titlebar widget — Black and white button with AGENT label */
+.monaco-workbench .open-in-agents-titlebar-widget {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	height: 24px;
+	padding: 0 12px;
+	border-radius: 6px;
+	cursor: pointer;
+	color: #ffffff;
+	background-color: #000000;
+	border: 1px solid #ffffff;
+	font-weight: 700;
+	font-size: 11px;
+	letter-spacing: 0.8px;
+	-webkit-app-region: no-drag;
+	white-space: nowrap;
+	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+
+.monaco-workbench .open-in-agents-titlebar-widget:hover {
+	background-color: #222222;
+	color: #ffffff;
+	border-color: #ffffff;
+}
+
+.monaco-workbench .open-in-agents-titlebar-widget > .open-in-agents-titlebar-widget-label {
+	display: inline-block;
+	max-width: none;
+	opacity: 1;
+	margin-left: 0;
+	color: #ffffff;
+	font-weight: 700;
+	font-size: 11px;
+	letter-spacing: 0.8px;
+	text-transform: uppercase;
+}
