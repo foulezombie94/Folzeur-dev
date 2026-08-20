@@ -59,7 +59,7 @@ jobs:
         run: node -e "const rag=require('./index.js'); const required=['indexProject','searchCode','getIndexStats','validateIndex','listIndexedFiles','getModelStatus']; for(const name of required){if(typeof rag[name]!=='function')throw new Error('missing '+name)}; JSON.parse(rag.getModelStatus());"
       - name: Retrieval quality gate
         run: npm run benchmark:retrieval
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: folzeur-rag-native-${{ matrix.artifact }}
           path: folzeur-rag-native/*.node
@@ -81,7 +81,7 @@ jobs:
       - run: cargo deny check
       - run: cargo cyclonedx --format json
       - run: node benchmarks/generate-third-party-notices.mjs
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: folzeur-rag-sbom
           path: |
@@ -115,7 +115,7 @@ jobs:
           FOLZEUR_BENCH_REPORT: performance-report.json
           FOLZEUR_MAX_PEAK_RSS_BYTES: '4294967296'
           FOLZEUR_MAX_SEARCH_P95_MS: '2000'
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: folzeur-rag-performance
           path: folzeur-rag-native/performance-report.json
