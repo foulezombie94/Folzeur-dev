@@ -11,14 +11,29 @@ export interface NativeToolSchema {
 	readonly properties?: Readonly<Record<string, NativeToolSchema>>;
 	readonly required?: readonly string[];
 	readonly enum?: readonly unknown[];
+	readonly const?: unknown;
 	readonly items?: NativeToolSchema;
+	readonly allOf?: readonly NativeToolSchema[];
+	readonly anyOf?: readonly NativeToolSchema[];
+	readonly oneOf?: readonly NativeToolSchema[];
+	readonly not?: NativeToolSchema;
 	readonly minimum?: number;
 	readonly maximum?: number;
+	readonly exclusiveMinimum?: number;
+	readonly exclusiveMaximum?: number;
+	readonly multipleOf?: number;
 	readonly minLength?: number;
 	readonly maxLength?: number;
+	readonly pattern?: string;
+	readonly format?: string;
 	readonly minItems?: number;
 	readonly maxItems?: number;
-	readonly additionalProperties?: boolean;
+	readonly uniqueItems?: boolean;
+	readonly minProperties?: number;
+	readonly maxProperties?: number;
+	readonly patternProperties?: Readonly<Record<string, NativeToolSchema>>;
+	readonly dependentRequired?: Readonly<Record<string, readonly string[]>>;
+	readonly additionalProperties?: boolean | NativeToolSchema;
 	readonly description?: string;
 }
 

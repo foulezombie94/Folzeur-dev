@@ -9,7 +9,7 @@ import { NativeSearchReplaceStrategy } from '../diff/NativeSearchReplaceStrategy
 import { DiffResult } from '../diff/types.js';
 import { INativeTool } from './INativeTool.js';
 import { WorkspaceIgnoreGuard } from '../utils/WorkspaceIgnoreGuard.js';
-import { hash } from '../../../../../../base/common/hash.js';
+import { sha256 } from '../utils/AgentStateCrypto.js';
 import { IFolzeurAgentService } from '../../../../../../platform/folzeurAgent/common/folzeurAgent.js';
 
 export class NativeApplyDiffTool implements INativeTool {
@@ -24,7 +24,7 @@ export class NativeApplyDiffTool implements INativeTool {
 		properties: {
 			filePath: { type: 'string', minLength: 1, maxLength: 32_768, description: 'The absolute path to the file.' },
 			diffContent: { type: 'string', minLength: 1, maxLength: 2_000_000, description: 'The diff content to apply, in search/replace format.' },
-			expectedHash: { type: 'string', minLength: 1, maxLength: 128, description: 'contentHash returned by read_file. The edit is rejected if the file changed.' }
+			expectedHash: { type: 'string', pattern: '^[a-f0-9]{64}$', description: 'SHA-256 contentHash returned by read_file. The edit is rejected if the file changed.' }
 		},
 		additionalProperties: false,
 		required: ['filePath', 'diffContent', 'expectedHash']
@@ -54,7 +54,7 @@ export class NativeApplyDiffTool implements INativeTool {
 			// Read the current file content
 			const fileContent = await this.textFileService.read(uri);
 			const originalText = fileContent.value;
-			if (parameters.expectedHash !== hash(originalText).toString(16)) {
+			if (parameters.expectedHash !== await sha256(originalText)) {
 				return { success: false, error: 'Edit conflict: the file changed after it was read. Read it again and regenerate the patch.' };
 			}
 
@@ -70,10 +70,10 @@ export class NativeApplyDiffTool implements INativeTool {
 			if (result.success && result.content !== undefined) {
 				if (this.textFileService.isDirty(uri)) {return { success: false, error: `Edit conflict: ${filePath} gained unsaved editor changes while the diff was computed.` };}
 				const beforeWrite = await this.textFileService.read(uri);
-				if (hash(beforeWrite.value).toString(16) !== parameters.expectedHash) {return { success: false, error: `Edit conflict: ${filePath} changed while the diff was computed.` };}
+				if (await sha256(beforeWrite.value) !== parameters.expectedHash) {return { success: false, error: `Edit conflict: ${filePath} changed while the diff was computed.` };}
 				await this.textFileService.write(uri, result.content);
 				const afterWrite = await this.textFileService.read(uri);
-				if (hash(afterWrite.value).toString(16) !== hash(result.content).toString(16)) {return { success: false, error: `Write verification failed for ${filePath}.` };}
+				if (afterWrite.value !== result.content) {return { success: false, error: `Write verification failed for ${filePath}.` };}
 				this.consecutiveFailures.delete(filePath);
 			} else {
 				const failures = (this.consecutiveFailures.get(filePath) || 0) + 1;

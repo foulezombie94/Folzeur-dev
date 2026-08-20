@@ -7,9 +7,9 @@ import { URI } from '../../../../../../base/common/uri.js';
 import { ITextFileService } from '../../../../../services/textfile/common/textfiles.js';
 import { IFileService } from '../../../../../../platform/files/common/files.js';
 import { dirname } from '../../../../../../base/common/path.js';
-import { hash } from '../../../../../../base/common/hash.js';
 import { INativeTool } from './INativeTool.js';
 
+import { sha256 } from '../utils/AgentStateCrypto.js';
 import { WorkspaceIgnoreGuard } from '../utils/WorkspaceIgnoreGuard.js';
 
 export class NativeWriteFileTool implements INativeTool {
@@ -20,7 +20,7 @@ export class NativeWriteFileTool implements INativeTool {
 		properties: {
 			path: { type: 'string', minLength: 1, maxLength: 32_768, description: 'The absolute path to the file.' },
 			content: { type: 'string', maxLength: 5_000_000, description: 'The new file content.' },
-			expectedHash: { type: 'string', description: 'Optional contentHash returned by read_file for overwrite conflict detection.' }
+			expectedHash: { type: 'string', pattern: '^[a-f0-9]{64}$', description: 'Optional SHA-256 contentHash returned by read_file for overwrite conflict detection.' }
 		},
 		additionalProperties: false,
 		required: ['path', 'content']
@@ -56,7 +56,7 @@ export class NativeWriteFileTool implements INativeTool {
 					throw new Error(`Edit conflict: ${filePath} has unsaved editor changes. Save and read it again before overwriting.`);
 				}
 				const current = await this.textFileService.read(uri);
-				if (hash(current.value).toString(16) !== parameters.expectedHash) {
+				if (await sha256(current.value) !== parameters.expectedHash) {
 					throw new Error(`Edit conflict: ${filePath} changed after it was read. Read it again before overwriting.`);
 				}
 			}
@@ -66,11 +66,11 @@ export class NativeWriteFileTool implements INativeTool {
 			if (exists) {
 				if (this.textFileService.isDirty(uri)) {throw new Error(`Edit conflict: ${filePath} gained unsaved editor changes before write.`);}
 				const beforeWrite = await this.textFileService.read(uri);
-				if (hash(beforeWrite.value).toString(16) !== parameters.expectedHash) {throw new Error(`Edit conflict: ${filePath} changed before write.`);}
+				if (await sha256(beforeWrite.value) !== parameters.expectedHash) {throw new Error(`Edit conflict: ${filePath} changed before write.`);}
 			} else if (await this.fileService.exists(uri)) {throw new Error(`Edit conflict: ${filePath} was created before write.`);}
 			await this.textFileService.write(uri, content);
 			const afterWrite = await this.textFileService.read(uri);
-			if (hash(afterWrite.value).toString(16) !== hash(content).toString(16)) {throw new Error(`Write verification failed for ${filePath}.`);}
+			if (afterWrite.value !== content) {throw new Error(`Write verification failed for ${filePath}.`);}
 			return `File written successfully at ${filePath}`;
 		} catch (error) {
 			throw new Error(`Error writing file: ${error instanceof Error ? error.message : String(error)}`);

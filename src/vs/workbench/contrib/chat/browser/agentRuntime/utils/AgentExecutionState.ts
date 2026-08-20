@@ -9,18 +9,20 @@ import { AgentRuntimePhase, AgentRuntimeStateMachine, AgentStateTransition } fro
 export type AgentExecutionPhase = AgentRuntimePhase;
 
 export interface AgentVerificationEvidence {
-	readonly tool: 'run_tests' | 'build';
+	readonly tool: 'run_tests' | 'build' | 'run_command' | 'execute_command' | 'browser_action' | 'diagnostics';
 	readonly command: string;
 	readonly exitCode: 0;
 	readonly outputHash: string;
 	readonly completedAt: number;
 	readonly mutationRevision: number;
+	readonly externalInteractionRevision: number;
 	readonly newDiagnosticErrors: number;
 }
 
 export interface AgentExecutionSnapshot {
 	readonly phase: AgentExecutionPhase;
 	readonly mutationRevision: number;
+	readonly externalInteractionRevision: number;
 	readonly modifiedFiles: readonly string[];
 	readonly nonRollbackableEffects: readonly string[];
 	readonly verification?: AgentVerificationEvidence;
@@ -45,6 +47,7 @@ export type AgentCompletionDecision = { readonly allowed: true } | { readonly al
 export class AgentExecutionState {
 	private readonly stateMachine = new AgentRuntimeStateMachine();
 	private _mutationRevision = 0;
+	private _externalInteractionRevision = 0;
 	private readonly _modifiedFiles = new Set<string>();
 	private readonly _nonRollbackableEffects: string[] = [];
 	private _verification: AgentVerificationEvidence | undefined;
@@ -57,6 +60,7 @@ export class AgentExecutionState {
 	get phase(): AgentExecutionPhase { return this.stateMachine.phase; }
 	get hasMutations(): boolean { return this._mutationRevision > 0; }
 	get mutationRevision(): number { return this._mutationRevision; }
+	get externalInteractionRevision(): number { return this._externalInteractionRevision; }
 	get verification(): AgentVerificationEvidence | undefined { return this._verification; }
 	get modifiedFiles(): readonly string[] { return [...this._modifiedFiles]; }
 	get debugGuidance(): string {
@@ -67,6 +71,7 @@ export class AgentExecutionState {
 	reset(): void {
 		this.stateMachine.reset();
 		this._mutationRevision = 0;
+		this._externalInteractionRevision = 0;
 		this._modifiedFiles.clear();
 		this._nonRollbackableEffects.length = 0;
 		this._verification = undefined;
@@ -92,6 +97,7 @@ export class AgentExecutionState {
 			return;
 		}
 		this._mutationRevision = revision;
+		this._externalInteractionRevision = Number.isInteger(snapshot.externalInteractionRevision) ? Math.max(0, Number(snapshot.externalInteractionRevision)) : 0;
 		this._modifiedFiles.clear();
 		for (const file of Array.isArray(snapshot.modifiedFiles) ? snapshot.modifiedFiles : []) {if (typeof file === 'string' && file) {this._modifiedFiles.add(file);}}
 		this._nonRollbackableEffects.length = 0;
@@ -134,7 +140,22 @@ export class AgentExecutionState {
 		this.transitionToApplying('A confirmed command may have produced external mutations.');
 	}
 
-	recordVerification(tool: 'run_tests' | 'build', command: string, output: string, newDiagnosticErrors: number): void {
+	recordCommandMutation(effect: string, filePaths: readonly string[]): void {
+		this._mutationRevision++;
+		this._nonRollbackableEffects.push(effect.slice(0, 1000));
+		for (const filePath of filePaths) {if (filePath) {this._modifiedFiles.add(filePath);}}
+		this._verification = undefined;
+		this._finalDiffReviewRevision = undefined;
+		this.transitionToApplying(filePaths.length
+			? `A terminal command changed ${filePaths.length} observed workspace path(s).`
+			: 'A confirmed command may have produced mutations that were not observable as workspace file events.');
+	}
+
+	recordExternalInteraction(): void {
+		this._externalInteractionRevision++;
+	}
+
+	recordVerification(tool: AgentVerificationEvidence['tool'], command: string, output: string, newDiagnosticErrors: number): void {
 		this._verification = {
 			tool,
 			command,
@@ -142,6 +163,7 @@ export class AgentExecutionState {
 			outputHash: hash(output).toString(16),
 			completedAt: Date.now(),
 			mutationRevision: this._mutationRevision,
+			externalInteractionRevision: this._externalInteractionRevision,
 			newDiagnosticErrors,
 		};
 		this._lastFailure = undefined;
@@ -235,6 +257,7 @@ export class AgentExecutionState {
 		return {
 			phase: this.stateMachine.phase,
 			mutationRevision: this._mutationRevision,
+			externalInteractionRevision: this._externalInteractionRevision,
 			modifiedFiles: [...this._modifiedFiles],
 			nonRollbackableEffects: [...this._nonRollbackableEffects],
 			verification: this._verification,

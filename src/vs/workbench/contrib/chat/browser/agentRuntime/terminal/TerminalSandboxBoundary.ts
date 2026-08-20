@@ -5,6 +5,7 @@
 
 import { URI } from '../../../../../../base/common/uri.js';
 import { ITerminalSandboxService, TerminalSandboxPrerequisiteCheck } from '../../../../../../platform/sandbox/common/terminalSandboxService.js';
+import { classifyAgentCommand } from '../utils/AgentCommandPolicy.js';
 
 export interface PreparedTerminalCommand {
 	readonly command: string;
@@ -15,9 +16,13 @@ export interface PreparedTerminalCommand {
 export class TerminalSandboxBoundary {
 	constructor(private readonly sandboxService: ITerminalSandboxService) { }
 
-	async prepare(command: string, cwd: string): Promise<PreparedTerminalCommand> {
+	async prepare(command: string, cwd: string, allowUnsandboxedHost = false): Promise<PreparedTerminalCommand> {
 		const prerequisites = await this.sandboxService.checkForSandboxingPrereqs(false, { isDefaultApprovalPermissionEnabled: true });
 		if (!prerequisites.enabled || prerequisites.failedCheck === TerminalSandboxPrerequisiteCheck.Config) {
+			const risk = classifyAgentCommand(command);
+			if (risk !== 'read_only' && !allowUnsandboxedHost) {
+				throw new Error('The OS terminal sandbox is unavailable. This non-read-only command is blocked by the fail-closed boundary. Set allowUnsandboxedHost=true and grant the explicit confirmation only when host execution is intended.');
+			}
 			return { command, sandboxed: false };
 		}
 		if (prerequisites.failedCheck) {

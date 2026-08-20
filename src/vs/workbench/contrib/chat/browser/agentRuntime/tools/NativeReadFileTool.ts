@@ -4,10 +4,10 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { URI } from '../../../../../../base/common/uri.js';
-import { hash } from '../../../../../../base/common/hash.js';
 import { ITextFileService } from '../../../../../services/textfile/common/textfiles.js';
 import { INativeTool } from './INativeTool.js';
 
+import { sha256 } from '../utils/AgentStateCrypto.js';
 import { WorkspaceIgnoreGuard } from '../utils/WorkspaceIgnoreGuard.js';
 
 export class NativeReadFileTool implements INativeTool {
@@ -51,7 +51,7 @@ export class NativeReadFileTool implements INativeTool {
 			if (content.includes('\0')) {
 				return 'Error: binary files cannot be read as text.';
 			}
-			const contentHash = hash(content).toString(16);
+			const contentHash = await sha256(content);
 			
 			const lines = content.split(/\r?\n/);
 			const totalLines = lines.length;

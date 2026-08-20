@@ -8,7 +8,7 @@ import { IFileService } from '../../../../../../platform/files/common/files.js';
 import { INativeTool } from './INativeTool.js';
 import { WorkspaceIgnoreGuard } from '../utils/WorkspaceIgnoreGuard.js';
 import { ITextFileService } from '../../../../../services/textfile/common/textfiles.js';
-import { hash } from '../../../../../../base/common/hash.js';
+import { sha256 } from '../utils/AgentStateCrypto.js';
 
 export class NativeDeleteFileTool implements INativeTool {
 	private ignoreGuard?: WorkspaceIgnoreGuard;
@@ -19,7 +19,7 @@ export class NativeDeleteFileTool implements INativeTool {
 		additionalProperties: false,
 		properties: {
 			path: { type: 'string', minLength: 1, maxLength: 32_768, description: 'Absolute path of the file to delete.' },
-			expectedHash: { type: 'string', minLength: 1, description: 'contentHash returned by read_file.' }
+			expectedHash: { type: 'string', pattern: '^[a-f0-9]{64}$', description: 'SHA-256 contentHash returned by read_file.' }
 		},
 		required: ['path', 'expectedHash']
 	};
@@ -36,7 +36,7 @@ export class NativeDeleteFileTool implements INativeTool {
 			if (stat.isDirectory) {throw new Error(`${filePath} is a directory. This tool only deletes files.`);}
 			if (this.textFileService.isDirty(uri)) {throw new Error(`${filePath} has unsaved editor changes. Save and read it again before deleting.`);}
 			const current = await this.textFileService.read(uri);
-			if (hash(current.value).toString(16) !== parameters.expectedHash) {throw new Error(`${filePath} changed after it was read. Read it again before deleting.`);}
+			if (await sha256(current.value) !== parameters.expectedHash) {throw new Error(`${filePath} changed after it was read. Read it again before deleting.`);}
 			await this.fileService.del(uri, { recursive: false });
 			return `File deleted successfully at ${filePath}`;
 		} catch (error) {

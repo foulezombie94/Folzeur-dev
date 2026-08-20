@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { INativeTool } from './INativeTool.js';
+import { isLinux } from '../../../../../../base/common/platform.js';
 
 export interface PlanStep {
 	readonly id: string;
@@ -12,6 +13,8 @@ export interface PlanStep {
 	readonly dependsOn: readonly string[];
 	readonly acceptanceCriteria: readonly string[];
 	readonly evidence: readonly string[];
+	readonly criterionEvidence?: Readonly<Record<string, readonly string[]>>;
+	readonly parentId?: string;
 	readonly files?: readonly string[];
 	readonly affectedFiles?: readonly string[];
 	readonly verification?: readonly string[];
@@ -30,28 +33,30 @@ export interface PlanEvidenceRecord {
 	readonly kind: 'read' | 'mutation' | 'verification';
 }
 
-const MUTATION_EVIDENCE_TOOLS = new Set(['apply_diff', 'apply_patch_transaction', 'write_to_file', 'create_directory', 'delete_file', 'rollback_task_changes', 'execute_command', 'run_command', 'run_background', 'package_manager', 'git_checkout']);
-const VERIFICATION_EVIDENCE_TOOLS = new Set(['run_tests', 'build']);
+const MUTATION_EVIDENCE_TOOLS = new Set(['apply_diff', 'apply_patch_transaction', 'write_to_file', 'create_directory', 'delete_file', 'rollback_task_changes', 'execute_command', 'run_command', 'run_background', 'package_manager', 'git_checkout', 'git_operation']);
+const VERIFICATION_EVIDENCE_TOOLS = new Set(['run_tests', 'build', 'run_command', 'execute_command', 'browser_action', 'diagnostics']);
 
 /** Deterministic task-state machine: a plan may have at most one active step. */
 export class NativeTaskPlanTool implements INativeTool {
 	public readonly name = 'update_task_plan';
-	public readonly description = 'Create or replan a persistent dependency-aware execution plan. Completed steps require runtime-issued evidence references returned by successful tools (for example tool:<toolCallId>), not free-form claims. Supply revisionReason whenever completed work is reopened or the plan changes materially.';
+	public readonly description = 'Create or replan a persistent dependency-aware execution plan. For every completed step, map each acceptance criterion ID (criterion_1, criterion_2, …) to unique runtime evidence in criterionEvidence. Parent/child steps support long hierarchical tasks.';
 	public readonly inputSchema = {
 		type: 'object', additionalProperties: false,
 		properties: {
 			revisionReason: { type: 'string', minLength: 1, maxLength: 500 },
 			steps: {
-				type: 'array', minItems: 1, maxItems: 20,
+				type: 'array', minItems: 1, maxItems: 100,
 				items: {
 					type: 'object', additionalProperties: false,
 					properties: {
 						id: { type: 'string', minLength: 1, maxLength: 80 },
+						parentId: { type: 'string', minLength: 1, maxLength: 80 },
 						step: { type: 'string', minLength: 1, maxLength: 300 },
 						status: { type: 'string', enum: ['pending', 'in_progress', 'blocked', 'completed', 'failed'] },
 						dependsOn: { type: 'array', maxItems: 10, items: { type: 'string', minLength: 1, maxLength: 80 } },
 						acceptanceCriteria: { type: 'array', minItems: 1, maxItems: 10, items: { type: 'string', minLength: 1, maxLength: 300 } },
 						evidence: { type: 'array', maxItems: 10, items: { type: 'string', minLength: 1, maxLength: 1000 } },
+						criterionEvidence: { type: 'object', additionalProperties: { type: 'array', minItems: 1, maxItems: 5, items: { type: 'string', minLength: 1, maxLength: 1000 } } },
 						files: { type: 'array', maxItems: 30, items: { type: 'string', minLength: 1, maxLength: 32_768 } },
 						affectedFiles: { type: 'array', maxItems: 30, items: { type: 'string', minLength: 1, maxLength: 32_768 } },
 						verification: { type: 'array', maxItems: 10, items: { type: 'string', minLength: 1, maxLength: 300 } },
@@ -99,7 +104,7 @@ export class NativeTaskPlanTool implements INativeTool {
 	}
 	public get hasPlan(): boolean { return this.steps.length > 0; }
 	public get isComplete(): boolean { return this.hasPlan && this.steps.every(step => step.status === 'completed'); }
-	public get acceptanceCriteriaSatisfied(): boolean { return this.hasPlan && this.steps.every(step => step.status === 'completed' && step.evidence.length === step.acceptanceCriteria.length); }
+	public get acceptanceCriteriaSatisfied(): boolean { return this.hasPlan && this.steps.every(step => step.status === 'completed' && criterionEvidenceIsComplete(step)); }
 	public get snapshot(): readonly PlanStep[] { return this.steps; }
 	public get revisionHistory(): readonly PlanRevision[] { return this.revisions; }
 	public get evidenceSnapshot(): readonly PlanEvidenceRecord[] { return [...this.evidenceReferences.values()]; }
@@ -131,18 +136,26 @@ export class NativeTaskPlanTool implements INativeTool {
 			ids.add(id);
 		}
 		for (const step of steps) {
+			if (step.parentId && !ids.has(step.parentId)) {throw new Error(`Unknown parent step ${step.parentId} in step ${step.id}.`);}
+			if (step.parentId === step.id) {throw new Error(`Plan step ${step.id} cannot be its own parent.`);}
 			const dependencies = new Set(step.dependsOn);
 			if (dependencies.size !== step.dependsOn.length) {throw new Error(`Duplicate dependency in step ${step.id}.`);}
 			if (dependencies.has(step.id)) {throw new Error(`Plan step ${step.id} cannot depend on itself.`);}
 			for (const dependency of dependencies) {if (!ids.has(dependency)) {throw new Error(`Unknown dependency ${dependency} in step ${step.id}.`);}}
-			if (step.evidence.length > step.acceptanceCriteria.length) {throw new Error(`Step ${step.id} has more evidence entries than acceptance criteria.`);}
-			if (step.status === 'completed' && step.evidence.length !== step.acceptanceCriteria.length) {throw new Error(`Completed step ${step.id} requires one evidence entry per acceptance criterion.`);}
+			if (step.status === 'completed' && !criterionEvidenceIsComplete(step)) {throw new Error(`Completed step ${step.id} requires criterionEvidence for every criterion_1..criterion_${step.acceptanceCriteria.length}, with unique evidence references.`);}
 			if (this.strictEvidence && step.status === 'completed') {
-				const unverified = step.evidence.find(reference => !this.evidenceReferences.has(reference));
+				const mappedEvidence = Object.values(step.criterionEvidence ?? {}).flat();
+				const unverified = mappedEvidence.find(reference => !this.evidenceReferences.has(reference));
 				if (unverified) {throw new Error(`Completed step ${step.id} cites unknown runtime evidence ${unverified}. Use a tool:<toolCallId> reference returned by a successful tool.`);}
-				const records = step.evidence.map(reference => this.evidenceReferences.get(reference)!);
+				const records = mappedEvidence.map(reference => this.evidenceReferences.get(reference)!);
 				if ((step.affectedFiles?.length || step.files?.length) && !records.some(record => record.kind === 'mutation')) {throw new Error(`Completed step ${step.id} affects files but cites no successful mutation evidence.`);}
-				if (step.verification?.length && !records.some(record => record.kind === 'verification')) {throw new Error(`Completed step ${step.id} requires verification but cites no successful run_tests or build evidence.`);}
+				if (step.verification?.length && !records.some(record => record.kind === 'verification')) {throw new Error(`Completed step ${step.id} requires verification but cites no successful test, build, diagnostic, lint/typecheck, command, HTTP, or browser evidence.`);}
+				for (let index = 0; index < step.acceptanceCriteria.length; index++) {
+					const criterion = step.acceptanceCriteria[index];
+					const criterionRecords = (step.criterionEvidence?.[`criterion_${index + 1}`] ?? []).map(reference => this.evidenceReferences.get(reference)!);
+					const expectedKind = expectedEvidenceKind(criterion);
+					if (expectedKind && !criterionRecords.some(record => record.kind === expectedKind)) {throw new Error(`Criterion criterion_${index + 1} in step ${step.id} requires ${expectedKind} evidence that corresponds to: ${criterion}`);}
+				}
 			}
 		}
 		this.assertAcyclic(steps);
@@ -160,11 +173,13 @@ export class NativeTaskPlanTool implements INativeTool {
 		if (this.steps.length && changedStepIds.length && !parameters.revisionReason?.trim()) {throw new Error('A material plan update requires revisionReason so the replan decision remains auditable.');}
 		this.steps = steps.map(step => ({
 			id: step.id.trim(),
+			parentId: step.parentId?.trim(),
 			step: step.step.trim(),
 			status: step.status,
 			dependsOn: [...step.dependsOn],
 			acceptanceCriteria: step.acceptanceCriteria.map(value => value.trim()),
 			evidence: step.evidence.map(value => value.trim()),
+			criterionEvidence: step.criterionEvidence ? Object.fromEntries(Object.entries(step.criterionEvidence).map(([criterionId, references]) => [criterionId, references.map(value => value.trim())])) : undefined,
 			files: step.files?.map(value => value.trim()),
 			affectedFiles: (step.affectedFiles ?? step.files)?.map(value => value.trim()),
 			verification: step.verification?.map(value => value.trim()),
@@ -193,5 +208,25 @@ export class NativeTaskPlanTool implements INativeTool {
 }
 
 function normalizePlanPath(value: string): string {
-	return value.trim().replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/$/, '').toLowerCase();
+	const normalized = value.trim().replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/$/, '');
+	return isLinux ? normalized : normalized.toLowerCase();
+}
+
+function criterionEvidenceIsComplete(step: PlanStep): boolean {
+	if (!step.acceptanceCriteria.length || !step.criterionEvidence) {return false;}
+	const references: string[] = [];
+	for (let index = 0; index < step.acceptanceCriteria.length; index++) {
+		const evidence = step.criterionEvidence[`criterion_${index + 1}`];
+		if (!Array.isArray(evidence) || !evidence.length) {return false;}
+		references.push(...evidence);
+	}
+	return references.length === new Set(references).size && step.evidence.length === references.length && step.evidence.every(reference => references.includes(reference));
+}
+
+function expectedEvidenceKind(criterion: string): PlanEvidenceRecord['kind'] | undefined {
+	const normalized = criterion.toLowerCase();
+	if (/test|build|compile|lint|typecheck|diagnostic|smoke|benchmark|valid/.test(normalized)) {return 'verification';}
+	if (/fix|change|create|delete|write|implement|migrat|update|refactor|corrig|modifier|ajouter|supprimer/.test(normalized)) {return 'mutation';}
+	if (/inspect|read|review|analy|verify|check|confirmer|document/.test(normalized)) {return 'read';}
+	return undefined;
 }

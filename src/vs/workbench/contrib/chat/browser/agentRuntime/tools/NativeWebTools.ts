@@ -6,6 +6,7 @@
 import { INativeTool } from './INativeTool.js';
 import { CancellationToken } from '../../../../../../base/common/cancellation.js';
 import { assertPublicHttpUrl, fetchWithPolicy } from '../utils/AgentNetworkPolicy.js';
+import { ISecretStorageService } from '../../../../../../platform/secrets/common/secrets.js';
 
 const MAX_RESPONSE_CHARS = 120_000;
 const FETCH_TIMEOUT_MS = 15_000;
@@ -17,9 +18,9 @@ function htmlToText(html: string): string {
 		.replace(/\s+/g, ' ').trim();
 }
 
-async function fetchText(rawUrl: string, token: CancellationToken): Promise<{ text: string; contentType: string }> {
+async function fetchText(rawUrl: string, token: CancellationToken, headers?: Readonly<Record<string, string>>): Promise<{ text: string; contentType: string }> {
 	const url = assertPublicHttpUrl(rawUrl);
-	const response = await fetchWithPolicy(url, token, FETCH_TIMEOUT_MS);
+	const response = await fetchWithPolicy(url, token, FETCH_TIMEOUT_MS, undefined, headers);
 	if (!response.ok) {throw new Error(`HTTP ${response.status} ${response.statusText}`);}
 	const contentType = response.headers.get('content-type') || '';
 	const text = (await response.text()).slice(0, MAX_RESPONSE_CHARS);
@@ -30,11 +31,23 @@ export class NativeWebSearchTool implements INativeTool {
 	public readonly name = 'web_search';
 	public readonly description = 'Search the public web and return a small set of titles, URLs, and snippets.';
 	public readonly inputSchema = { type: 'object', additionalProperties: false, properties: { query: { type: 'string', minLength: 1, maxLength: 2_000 }, limit: { type: 'integer', minimum: 1, maximum: 10 } }, required: ['query'] };
+	constructor(private readonly secretStorageService?: ISecretStorageService) { }
 
 	public async execute(parameters: { query?: string; limit?: number }, _cwd: string, _progress?: unknown, token: CancellationToken = CancellationToken.None): Promise<string> {
 		const query = parameters.query?.trim();
 		if (!query) {throw new Error('query is required');}
 		const limit = Math.min(10, Math.max(1, Math.floor(parameters.limit || 5)));
+		const braveKey = await this.secretStorageService?.get('chat.api.webSearch.braveKey');
+		if (braveKey) {
+			try {
+				const { text } = await fetchText(`https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=${limit}`, token, { accept: 'application/json', 'x-subscription-token': braveKey });
+				const parsed = JSON.parse(text) as { web?: { results?: Array<{ title?: string; url?: string; description?: string }> } };
+				const results = (parsed.web?.results ?? []).slice(0, limit).map((item, index) => `${index + 1}. ${item.title ?? ''}\nURL: ${item.url ?? ''}\n${item.description ?? ''}`);
+				if (results.length) {return `Web results for "${query}" (Brave Search API):\n${results.join('\n\n')}`;}
+			} catch {
+				// Continue with the public fallback when the configured provider is unavailable.
+			}
+		}
 		const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
 		try {
 			const { text } = await fetchText(url, token);
@@ -44,7 +57,7 @@ export class NativeWebSearchTool implements INativeTool {
 			while (results.length < limit && (match = pattern.exec(text))) {
 				results.push(`${results.length + 1}. ${htmlToText(match[2])}\nURL: ${match[1]}\n${htmlToText(match[3])}`);
 			}
-			return results.length ? `Web results for "${query}":\n${results.join('\n\n')}` : `No web results found for "${query}".`;
+			return results.length ? `Web results for "${query}" (DuckDuckGo fallback):\n${results.join('\n\n')}` : `No web results found for "${query}".`;
 		} catch (error) { return `Web search failed: ${error instanceof Error ? error.message : String(error)}`; }
 	}
 }

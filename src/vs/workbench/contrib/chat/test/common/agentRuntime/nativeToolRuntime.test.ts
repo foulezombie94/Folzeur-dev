@@ -10,9 +10,9 @@ import { NativeTaskPlanTool } from '../../../browser/agentRuntime/tools/NativeTa
 import { assertPublicHttpUrl } from '../../../browser/agentRuntime/utils/AgentNetworkPolicy.js';
 import { CancellationToken, CancellationTokenSource } from '../../../../../../base/common/cancellation.js';
 import { NativeApplyPatchTransactionTool } from '../../../browser/agentRuntime/tools/NativeApplyPatchTransactionTool.js';
-import { hash } from '../../../../../../base/common/hash.js';
 import { assessCommandSandbox, assessVerification, classifyAgentCommand, isAllowlistedCommand } from '../../../browser/agentRuntime/utils/AgentCommandPolicy.js';
 import { AgentExecutionState } from '../../../browser/agentRuntime/utils/AgentExecutionState.js';
+import { AgentStateCrypto, sha256 } from '../../../browser/agentRuntime/utils/AgentStateCrypto.js';
 import { BoundedStreamLineDecoder, FolzeurLanguageModelProvider, toFolzeurModelIdentifier } from '../../../browser/agentRuntime/FolzeurLanguageModelProvider.js';
 import { ChatMessageRole } from '../../../common/languageModels.js';
 import { TaskJournal } from '../../../browser/agentRuntime/utils/TaskJournal.js';
@@ -25,8 +25,41 @@ import { hashToolParameters, resolveNativeToolPolicy } from '../../../browser/ag
 import { createModelHttpError } from '../../../browser/agentRuntime/model/ModelAdapter.js';
 import { TaskSnapshotManager } from '../../../browser/agentRuntime/utils/TaskSnapshotManager.js';
 import { WorkspaceCodeIndex } from '../../../browser/agentRuntime/utils/WorkspaceCodeIndex.js';
+import { ToolResultStore } from '../../../browser/agentRuntime/utils/ToolResultStore.js';
+import { FileService } from '../../../../../../platform/files/common/fileService.js';
+import { InMemoryFileSystemProvider } from '../../../../../../platform/files/common/inMemoryFilesystemProvider.js';
+import { NullLogService } from '../../../../../../platform/log/common/log.js';
+import { Schemas } from '../../../../../../base/common/network.js';
+import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../../base/test/common/utils.js';
 
 suite('NativeToolRuntime', () => {
+	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
+
+	test('persists and paginates complete tool results beyond the former truncation limit', async () => {
+		const fileService = disposables.add(new FileService(new NullLogService()));
+		disposables.add(fileService.registerProvider(Schemas.inMemory, disposables.add(new InMemoryFileSystemProvider())));
+		const workspace = URI.from({ scheme: Schemas.inMemory, path: '/workspace' });
+		await fileService.createFolder(workspace);
+		const store = new ToolResultStore(fileService);
+		await store.setRunScope(workspace, 'run-1');
+		const source = `${'0123456789'.repeat(100_001)}é-fin`;
+		const retained = await store.put(source);
+		assert.ok(retained.length > 1_000_000);
+		assert.strictEqual(retained.hash.length, 64);
+		let offset = 0;
+		let restored = '';
+		while (offset < retained.length) {
+			const page = await store.read(retained.id, offset, 20_000);
+			assert.ok(page);
+			restored += page.value;
+			assert.ok(page.end > offset);
+			offset = page.end;
+		}
+		assert.strictEqual(restored, source);
+		await store.clear();
+		assert.strictEqual(await store.read(retained.id), undefined);
+	});
+
 	test('classifies tasks into execution strategies and scales adaptive budgets', () => {
 		assert.strictEqual(classifyTaskHeuristically('bonjour').kind, 'conversation');
 		assert.strictEqual(classifyTaskHeuristically('analyse le système de cache').kind, 'code_exploration');
@@ -104,14 +137,13 @@ suite('NativeToolRuntime', () => {
 		assert.strictEqual(providerRetryDelay(0, () => 0, 2_500), 2_500);
 	});
 
-	test('rejects terminal escape syntax before permission evaluation', () => {
+	test('accepts full shell syntax for enforcement by the OS sandbox', () => {
 		const workspace = 'C:\\repo';
 		assert.strictEqual(assessCommandSandbox('npm run typecheck', workspace).allowed, true);
 		assert.strictEqual(assessCommandSandbox('git -C C:\\repo status', workspace).allowed, true);
-		assert.strictEqual(assessCommandSandbox('git -C C:\\outside status', workspace).allowed, false);
-		assert.strictEqual(assessCommandSandbox('python -c "open(`C:/outside/x`)"', workspace).allowed, false);
-		assert.strictEqual(assessCommandSandbox('npm test; Remove-Item -Recurse C:\\repo', workspace).allowed, false);
-		assert.strictEqual(assessCommandSandbox('rg token ../other', workspace).allowed, false);
+		assert.strictEqual(assessCommandSandbox('git status && npm test | tee test.log', workspace).allowed, true);
+		assert.strictEqual(assessCommandSandbox('python -c "print(1)"', workspace).allowed, true);
+		assert.strictEqual(assessCommandSandbox('npm test\0whoami', workspace).allowed, false);
 	});
 
 	test('records cumulative token and event-based RAG metrics', () => {
@@ -160,9 +192,43 @@ suite('NativeToolRuntime', () => {
 	test('redacts credentials and recognizes secret-bearing paths', () => {
 		assert.strictEqual(isSensitivePath('C:/repo/.env.local'), true);
 		assert.strictEqual(isSensitivePath('C:/repo/config/secrets.json'), true);
+		for (const path of [
+			'C:/repo/config/ssl/server.key',
+			'C:/repo/nested/.ssh/id_rsa',
+			'C:/repo/nested/.ssh/id_ed25519',
+			'C:/repo/android/release.jks',
+			'C:/repo/android/release.keystore',
+			'C:/repo/vpn/client.ovpn',
+			'C:/repo/data/users.sqlite',
+			'C:/repo/data/users.sqlite3',
+			'C:/repo/data/cache.db',
+			'C:/repo/backups/latest.sql',
+			'C:/repo/backups/latest.dump',
+			'C:/repo/.history/private.ts',
+			'C:/repo/.vscode/settings.json',
+			'C:/repo/.idea/workspace.xml',
+			'C:/repo/logs/debug.log',
+			'C:/repo/.DS_Store',
+			'C:/repo/nested/Thumbs.db',
+		]) {
+			assert.strictEqual(isSensitivePath(path), true, `${path} must be excluded`);
+		}
 		assert.strictEqual(isSensitivePath('C:/repo/src/app.ts'), false);
 		assert.ok(!redactSecrets('api_key=super-secret-value bearer abcdefghijklmnop').includes('super-secret-value'));
 		assert.ok(!redactSecrets('api_key=super-secret-value bearer abcdefghijklmnop').includes('abcdefghijklmnop'));
+	});
+
+	test('preserves hashes and structured identifiers during entropy redaction', () => {
+		const technicalValues = [
+			'0123456789abcdefABCDEF0123456789',
+			'0123456789abcdef0123456789abcdef01234567',
+			'0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+			'550e8400-e29b-41d4-a716-446655440000',
+			'01ARZ3NDEKTSV4RRFFQ69G5FAV',
+			'sha256-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789+/=',
+		];
+		assert.deepStrictEqual(technicalValues.map(redactSecrets), technicalValues);
+		assert.strictEqual(redactSecrets('AbCdEfGhIjKlMnOpQrStUvWxYz0123456789+/='), '[REDACTED_HIGH_ENTROPY]');
 	});
 
 	test('rejects unknown, oversized and malformed parameters', () => {
@@ -175,10 +241,33 @@ suite('NativeToolRuntime', () => {
 			},
 			execute: async () => undefined
 		};
-		assert.throws(() => runtime.validate(tool, { tasks: [] }), /at least 1/);
-		assert.throws(() => runtime.validate(tool, { tasks: ['a'] }), /too short/);
-		assert.throws(() => runtime.validate(tool, { tasks: ['ok', 'ok', 'extra'] }), /at most 2/);
-		assert.throws(() => runtime.validate(tool, { tasks: ['ok'], surprise: true }), /not allowed/);
+		assert.throws(() => runtime.validate(tool, { tasks: [] }), /fewer than 1|at least 1/);
+		assert.throws(() => runtime.validate(tool, { tasks: ['a'] }), /fewer than 2|too short/);
+		assert.throws(() => runtime.validate(tool, { tasks: ['ok', 'ok', 'extra'] }), /more than 2|at most 2/);
+		assert.throws(() => runtime.validate(tool, { tasks: ['ok'], surprise: true }), /additional properties|not allowed/);
+	});
+
+	test('validates complete JSON Schema composition and patterns', () => {
+		const runtime = new NativeToolRuntime();
+		const tool: INativeTool = {
+			name: 'complex_schema', description: '',
+			inputSchema: {
+				type: 'object', additionalProperties: false, required: ['target'],
+				properties: {
+					target: {
+						oneOf: [
+							{ type: 'string', pattern: '^[a-z]+(?:/[a-z]+)*$' },
+							{ type: 'integer', minimum: 1 },
+						]
+					}
+				}
+			},
+			execute: async () => undefined
+		};
+		runtime.validate(tool, { target: 'src/runtime' });
+		runtime.validate(tool, { target: 4 });
+		assert.throws(() => runtime.validate(tool, { target: '../escape' }), /pattern|oneOf/);
+		assert.throws(() => runtime.validate(tool, { target: 0 }), /minimum|oneOf/);
 	});
 
 	test('coalesces identical concurrent reads', async () => {
@@ -222,9 +311,9 @@ suite('NativeToolRuntime', () => {
 			{ id: 'inspect', step: 'Inspect', status: 'in_progress', dependsOn: [], acceptanceCriteria: ['inspected'], evidence: [] },
 			{ id: 'edit', step: 'Edit', status: 'in_progress', dependsOn: [], acceptanceCriteria: ['edited'], evidence: [] }
 		] }), /Only one/);
-		await plan.execute({ steps: [{ id: 'inspect', step: 'Inspect', status: 'completed', dependsOn: [], acceptanceCriteria: ['inspected'], evidence: ['read_file output'] }, { id: 'edit', step: 'Edit', status: 'pending', dependsOn: ['inspect'], acceptanceCriteria: ['edited'], evidence: [] }] });
+		await plan.execute({ steps: [{ id: 'inspect', step: 'Inspect', status: 'completed', dependsOn: [], acceptanceCriteria: ['inspected'], evidence: ['read_file output'], criterionEvidence: { criterion_1: ['read_file output'] } }, { id: 'edit', step: 'Edit', status: 'pending', dependsOn: ['inspect'], acceptanceCriteria: ['edited'], evidence: [] }] });
 		assert.strictEqual(plan.isComplete, false);
-		await plan.execute({ revisionReason: 'Edit completed after its dependency', steps: [{ id: 'inspect', step: 'Inspect', status: 'completed', dependsOn: [], acceptanceCriteria: ['inspected'], evidence: ['read_file output'] }, { id: 'edit', step: 'Edit', status: 'completed', dependsOn: ['inspect'], acceptanceCriteria: ['edited'], evidence: ['apply_diff output'] }] });
+		await plan.execute({ revisionReason: 'Edit completed after its dependency', steps: [{ id: 'inspect', step: 'Inspect', status: 'completed', dependsOn: [], acceptanceCriteria: ['inspected'], evidence: ['read_file output'], criterionEvidence: { criterion_1: ['read_file output'] } }, { id: 'edit', step: 'Edit', status: 'completed', dependsOn: ['inspect'], acceptanceCriteria: ['edited'], evidence: ['apply_diff output'], criterionEvidence: { criterion_1: ['apply_diff output'] } }] });
 		assert.strictEqual(plan.isComplete, true);
 	});
 
@@ -232,9 +321,9 @@ suite('NativeToolRuntime', () => {
 		const plan = new NativeTaskPlanTool();
 		plan.enableStrictEvidence();
 		await plan.execute({ steps: [{ id: 'edit', step: 'Edit', status: 'in_progress', dependsOn: [], acceptanceCriteria: ['file updated'], evidence: [], affectedFiles: ['a.ts'], verification: ['targeted test'] }] });
-		await assert.rejects(() => plan.execute({ revisionReason: 'claim completion', steps: [{ id: 'edit', step: 'Edit', status: 'completed', dependsOn: [], acceptanceCriteria: ['file updated'], evidence: ['made it up'] }] }), /unknown runtime evidence/);
-		const evidence = plan.registerEvidence('call-1');
-		await plan.execute({ revisionReason: 'Tool confirmed the edit', steps: [{ id: 'edit', step: 'Edit', status: 'completed', dependsOn: [], acceptanceCriteria: ['file updated'], evidence: [evidence] }] });
+		await assert.rejects(() => plan.execute({ revisionReason: 'claim completion', steps: [{ id: 'edit', step: 'Edit', status: 'completed', dependsOn: [], acceptanceCriteria: ['file updated'], evidence: ['made it up'], criterionEvidence: { criterion_1: ['made it up'] } }] }), /unknown runtime evidence/);
+		const evidence = plan.registerEvidence('call-1', 'apply_diff');
+		await plan.execute({ revisionReason: 'Tool confirmed the edit', steps: [{ id: 'edit', step: 'Edit', status: 'completed', dependsOn: [], acceptanceCriteria: ['file updated'], evidence: [evidence], criterionEvidence: { criterion_1: [evidence] } }] });
 		assert.strictEqual(plan.isComplete, true);
 		assert.strictEqual(plan.revisionHistory.length, 2);
 	});
@@ -244,9 +333,10 @@ suite('NativeToolRuntime', () => {
 		plan.enableStrictEvidence();
 		await plan.execute({ steps: [{ id: 'edit', step: 'Edit and verify', status: 'in_progress', dependsOn: [], acceptanceCriteria: ['file updated', 'tests pass'], evidence: [], affectedFiles: ['src/a.ts'], verification: ['targeted tests'] }] });
 		const mutation = plan.registerEvidence('edit-1', 'apply_diff');
-		await assert.rejects(() => plan.execute({ revisionReason: 'Edit landed', steps: [{ id: 'edit', step: 'Edit and verify', status: 'completed', dependsOn: [], acceptanceCriteria: ['file updated', 'tests pass'], evidence: [mutation, mutation], affectedFiles: ['src/a.ts'], verification: ['targeted tests'] }] }), /requires verification/);
+		const unrelatedMutation = plan.registerEvidence('edit-2', 'apply_diff');
+		await assert.rejects(() => plan.execute({ revisionReason: 'Edit landed', steps: [{ id: 'edit', step: 'Edit and verify', status: 'completed', dependsOn: [], acceptanceCriteria: ['file updated', 'tests pass'], evidence: [mutation, unrelatedMutation], criterionEvidence: { criterion_1: [mutation], criterion_2: [unrelatedMutation] }, affectedFiles: ['src/a.ts'], verification: ['targeted tests'] }] }), /requires verification/);
 		const verification = plan.registerEvidence('test-1', 'run_tests');
-		await plan.execute({ revisionReason: 'Edit and tests passed', steps: [{ id: 'edit', step: 'Edit and verify', status: 'completed', dependsOn: [], acceptanceCriteria: ['file updated', 'tests pass'], evidence: [mutation, verification], affectedFiles: ['src/a.ts'], verification: ['targeted tests'] }] });
+		await plan.execute({ revisionReason: 'Edit and tests passed', steps: [{ id: 'edit', step: 'Edit and verify', status: 'completed', dependsOn: [], acceptanceCriteria: ['file updated', 'tests pass'], evidence: [mutation, verification], criterionEvidence: { criterion_1: [mutation], criterion_2: [verification] }, affectedFiles: ['src/a.ts'], verification: ['targeted tests'] }] });
 		assert.strictEqual(plan.completionBlockReason(['C:/workspace/src/a.ts']), undefined);
 		assert.match(plan.completionBlockReason(['C:/workspace/src/b.ts']) ?? '', /does not account/);
 	});
@@ -295,7 +385,8 @@ suite('NativeToolRuntime', () => {
 	test('defaults unknown shell commands to mutation and hardens allowlists', () => {
 		assert.strictEqual(classifyAgentCommand('git status'), 'read_only');
 		assert.strictEqual(classifyAgentCommand('npm test'), 'verification');
-		assert.strictEqual(classifyAgentCommand('Get-ChildItem'), 'mutation');
+		assert.strictEqual(classifyAgentCommand('Get-ChildItem'), 'read_only');
+		assert.strictEqual(classifyAgentCommand('Invoke-Widget'), 'mutation');
 		assert.strictEqual(classifyAgentCommand('Remove-Item -LiteralPath x -Recurse -Force'), 'destructive');
 		assert.strictEqual(classifyAgentCommand('echo ok; r"m" -rf workspace'), 'destructive');
 		assert.strictEqual(classifyAgentCommand('powershell -EncodedCommand ZABlAGwA'), 'destructive');
@@ -570,7 +661,7 @@ suite('NativeToolRuntime', () => {
 		assert.strictEqual(passed.accepted, true);
 		state.recordVerification('run_tests', 'npm test', '1 passing', 0);
 		state.recordFinalDiffReview();
-		await plan.execute({ revisionReason: 'Verification passed', steps: [{ id: 'edit', step: 'Edit and verify', status: 'completed', dependsOn: [], acceptanceCriteria: ['tests pass'], evidence: ['npm test: 1 passing'] }] });
+		await plan.execute({ revisionReason: 'Verification passed', steps: [{ id: 'edit', step: 'Edit and verify', status: 'completed', dependsOn: [], acceptanceCriteria: ['tests pass'], evidence: ['npm test: 1 passing'], criterionEvidence: { criterion_1: ['npm test: 1 passing'] } }] });
 		assert.deepStrictEqual(state.canComplete({ hasPlan: plan.hasPlan, planComplete: plan.isComplete, acceptanceCriteriaSatisfied: plan.acceptanceCriteriaSatisfied, newDiagnosticErrors: 0 }), { allowed: true });
 		state.beginTransaction('still-open');
 		assert.match(state.completionBlockReason(plan.hasPlan, plan.isComplete, 0) ?? '', /transactions/);
@@ -584,6 +675,7 @@ suite('NativeToolRuntime', () => {
 		const files = new Map<string, VSBuffer>();
 		const fileService = {
 			createFolder: async () => undefined,
+			exists: async (resource: URI) => files.has(resource.toString()),
 			writeFile: async (resource: URI, value: VSBuffer) => { files.set(resource.toString(), value); },
 			move: async (source: URI, target: URI) => { const value = files.get(source.toString()); if (!value) throw new Error('not found'); files.set(target.toString(), value); files.delete(source.toString()); },
 			readFile: async (resource: URI) => {
@@ -593,14 +685,18 @@ suite('NativeToolRuntime', () => {
 			},
 		};
 		const workspace = URI.file('C:/workspace');
-		const first = new TaskJournal(fileService as any, workspace, 'session-1');
+		const stateCrypto = AgentStateCrypto.fromBase64(AgentStateCrypto.generateKey());
+		const first = new TaskJournal(fileService as any, workspace, stateCrypto, 'session-1');
 		await first.initialize();
 		await first.record('tool_started', 'read_file');
 		await first.checkpoint('running', { iteration: 3, modifiedFiles: ['a.ts'] });
-		const resumed = new TaskJournal(fileService as any, workspace, 'session-1');
+		const resumed = new TaskJournal(fileService as any, workspace, stateCrypto, 'session-1');
 		const checkpoint = await resumed.initialize();
 		assert.strictEqual(checkpoint?.status, 'running');
 		assert.deepStrictEqual(checkpoint?.state, { iteration: 3, modifiedFiles: ['a.ts'] });
+		const journalResource = [...files.keys()].find(resource => resource.endsWith('/session-1.json'))!;
+		files.set(journalResource, VSBuffer.fromString(`${files.get(journalResource)!.toString()}tampered`));
+		await assert.rejects(new TaskJournal(fileService as any, workspace, stateCrypto, 'session-1').initialize(), /corrupt or unauthenticated/);
 	});
 
 	test('restores durable pre-mutation file contents after process recovery', async () => {
@@ -622,13 +718,16 @@ suite('NativeToolRuntime', () => {
 		const workspace = URI.file('C:/workspace');
 		const source = URI.file('C:/workspace/a.ts');
 		files.set(source.toString(), VSBuffer.fromString('before'));
+		const stateCrypto = AgentStateCrypto.fromBase64(AgentStateCrypto.generateKey());
 		const first = new TaskSnapshotManager(textFileService as any, fileService as any);
+		first.setStateCrypto(stateCrypto);
 		await first.initialize(workspace, 'run-1', false);
 		await first.capture(source.fsPath);
 		files.set(source.toString(), VSBuffer.fromString('after'));
 		await first.markApplied(source.fsPath);
 
 		const recovered = new TaskSnapshotManager(textFileService as any, fileService as any);
+		recovered.setStateCrypto(stateCrypto);
 		await recovered.initialize(workspace, 'run-1', true);
 		assert.strictEqual(await recovered.restoreAll(), 1);
 		assert.strictEqual(files.get(source.toString())?.toString(), 'before');
@@ -698,15 +797,15 @@ suite('NativeToolRuntime', () => {
 		const tool = new NativeApplyPatchTransactionTool(textFileService as any);
 		const diff = (from: string, to: string) => `<<<<<<< SEARCH\n${from}\n=======\n${to}\n>>>>>>> REPLACE`;
 		const rejected = await tool.execute({ changes: [
-			{ filePath: 'a.ts', expectedHash: hash(files.get('a.ts')!).toString(16), diffContent: diff('const a = 1;', 'const a = 2;') },
-			{ filePath: 'b.ts', expectedHash: 'stale', diffContent: diff('const b = 1;', 'const b = 2;') },
+			{ filePath: 'a.ts', expectedHash: await sha256(files.get('a.ts')!), diffContent: diff('const a = 1;', 'const a = 2;') },
+			{ filePath: 'b.ts', expectedHash: '0'.repeat(64), diffContent: diff('const b = 1;', 'const b = 2;') },
 		] });
 		assert.strictEqual(rejected.success, false);
 		assert.strictEqual(writes, 0);
 
 		const committed = await tool.execute({ changes: [
-			{ filePath: 'a.ts', expectedHash: hash(files.get('a.ts')!).toString(16), diffContent: diff('const a = 1;', 'const a = 2;') },
-			{ filePath: 'b.ts', expectedHash: hash(files.get('b.ts')!).toString(16), diffContent: diff('const b = 1;', 'const b = 2;') },
+			{ filePath: 'a.ts', expectedHash: await sha256(files.get('a.ts')!), diffContent: diff('const a = 1;', 'const a = 2;') },
+			{ filePath: 'b.ts', expectedHash: await sha256(files.get('b.ts')!), diffContent: diff('const b = 1;', 'const b = 2;') },
 		] });
 		assert.strictEqual(committed.success, true);
 		assert.deepStrictEqual([...files.values()], ['const a = 2;', 'const b = 2;']);
@@ -733,8 +832,8 @@ suite('NativeToolRuntime', () => {
 		const tool = new NativeApplyPatchTransactionTool(textFileService as any);
 		const diff = (from: string, to: string) => `<<<<<<< SEARCH\n${from}\n=======\n${to}\n>>>>>>> REPLACE`;
 		const result = await tool.execute({ changes: [
-			{ filePath: 'a.ts', expectedHash: hash('const a = 1;').toString(16), diffContent: diff('const a = 1;', 'const a = 2;') },
-			{ filePath: 'b.ts', expectedHash: hash('const b = 1;').toString(16), diffContent: diff('const b = 1;', 'const b = 2;') },
+			{ filePath: 'a.ts', expectedHash: await sha256('const a = 1;'), diffContent: diff('const a = 1;', 'const a = 2;') },
+			{ filePath: 'b.ts', expectedHash: await sha256('const b = 1;'), diffContent: diff('const b = 1;', 'const b = 2;') },
 		] });
 		assert.strictEqual(result.success, false);
 		assert.match(result.error ?? '', /safe rollback refused/);

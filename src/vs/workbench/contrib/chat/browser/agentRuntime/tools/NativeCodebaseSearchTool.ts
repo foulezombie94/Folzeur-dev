@@ -7,6 +7,7 @@ import { INativeTool } from './INativeTool.js';
 import { rustEngine } from '../native/rustEngine.js';
 import { WorkspaceCodeIndex } from '../utils/WorkspaceCodeIndex.js';
 import { WorkspaceOutlineIndex } from '../utils/WorkspaceOutlineIndex.js';
+import { sanitizeRepositoryTextForModel } from '../utils/SecretProtection.js';
 
 export interface CodebaseSearchCandidate {
 	filePath: string;
@@ -69,12 +70,16 @@ export class NativeCodebaseSearchTool implements INativeTool {
 			const previous = deduplicated.get(key);
 			deduplicated.set(key, previous ? { ...previous, score: previous.score + candidate.score, snippet: previous.snippet.length >= candidate.snippet.length ? previous.snippet : candidate.snippet } : candidate);
 		}
-		return [...deduplicated.values()].sort((a, b) => b.score - a.score).slice(0, Math.max(1, limit));
+		return [...deduplicated.values()]
+			.map(candidate => ({ ...candidate, snippet: sanitizeRepositoryTextForModel(candidate.filePath, candidate.snippet) }))
+			.sort((a, b) => b.score - a.score)
+			.slice(0, Math.max(1, limit));
 	}
 
 	public setIndex(index: WorkspaceCodeIndex): void { this.index = index; }
 	public setOutlineIndex(index: WorkspaceOutlineIndex): void { this.outline = index; }
 	public setWorkspace(workspace: string, nativeRagEnabled = true): void { this.workspace = workspace; rustEngine.setWorkspaceRagEnabled(workspace, nativeRagEnabled); rustEngine.warmWorkspaceIndex(workspace); }
+	public setModelDownloadAllowed(allowed: boolean): void {rustEngine.setModelDownloadAllowed(allowed);}
 	public cancelIndexing(): void {
 		if (this.workspace) {
 			rustEngine.cancelWorkspaceIndexing(this.workspace);

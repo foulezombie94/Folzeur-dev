@@ -6,10 +6,12 @@
 import { URI } from '../../../../../../base/common/uri.js';
 import { IFileService } from '../../../../../../platform/files/common/files.js';
 import { ITextFileService } from '../../../../../services/textfile/common/textfiles.js';
-import { hash } from '../../../../../../base/common/hash.js';
 import { dirname } from '../../../../../../base/common/resources.js';
 import { VSBuffer } from '../../../../../../base/common/buffer.js';
 import { generateUuid } from '../../../../../../base/common/uuid.js';
+import { isLinux } from '../../../../../../base/common/platform.js';
+import { isAbsolute } from '../../../../../../base/common/path.js';
+import { AgentStateCrypto } from './AgentStateCrypto.js';
 
 interface FileSnapshot {
 	readonly uri: URI;
@@ -50,9 +52,9 @@ export interface AgentFileSnapshot {
 
 /** Per-task, non-Git rollback that never commits or stages unrelated user work. */
 export class TaskSnapshotManager {
-	private static readonly SCHEMA_VERSION = 1;
-	private static readonly MAX_DURABLE_FILES = 2_000;
-	private static readonly MAX_DURABLE_BYTES = 256 * 1024 * 1024;
+	private static readonly SCHEMA_VERSION = 2;
+	private static readonly MAX_DURABLE_FILES = 20_000;
+	private static readonly MAX_DURABLE_BYTES = 2 * 1024 * 1024 * 1024;
 	private static readonly MAX_RETAINED_RUNS = 20;
 	private static readonly MAX_RETENTION_MS = 14 * 24 * 60 * 60 * 1_000;
 	private readonly snapshots = new Map<string, FileSnapshot>();
@@ -63,13 +65,20 @@ export class TaskSnapshotManager {
 	private durableManifest: URI | undefined;
 	private durableTemporaryManifest: URI | undefined;
 	private durableBytes = 0;
+	private workspace: URI | undefined;
+	private stateCrypto: AgentStateCrypto | undefined;
+	private restoreGuard: ((filePath: string) => Promise<URI>) | undefined;
 
 	constructor(private readonly textFileService: ITextFileService, private readonly fileService: IFileService) { }
 
-	public reset(): void { this.snapshots.clear(); this.scopedSnapshots.clear(); this.directories.clear(); this.activeScope = {}; this.durableFolder = undefined; this.durableManifest = undefined; this.durableTemporaryManifest = undefined; this.durableBytes = 0; }
+	public reset(): void { this.snapshots.clear(); this.scopedSnapshots.clear(); this.directories.clear(); this.activeScope = {}; this.durableFolder = undefined; this.durableManifest = undefined; this.durableTemporaryManifest = undefined; this.durableBytes = 0; this.workspace = undefined; this.restoreGuard = undefined; }
+	public setStateCrypto(stateCrypto: AgentStateCrypto): void { this.stateCrypto = stateCrypto; }
+	public setRestoreGuard(guard: (filePath: string) => Promise<URI>): void { this.restoreGuard = guard; }
 
 	/** Opens a run-scoped durable snapshot store and restores it after an interrupted process. */
 	public async initialize(workspace: URI, runId: string, recover: boolean): Promise<void> {
+		if (!this.stateCrypto) {throw new Error('Durable snapshot encryption is not initialized.');}
+		this.workspace = workspace;
 		const safeRunId = runId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(-160) || generateUuid();
 		this.durableFolder = URI.joinPath(workspace, '.folzeur', 'agent-state', 'snapshots', safeRunId);
 		this.durableManifest = URI.joinPath(this.durableFolder, 'manifest.json');
@@ -84,7 +93,7 @@ export class TaskSnapshotManager {
 
 	/** Captures every missing ancestor that createFolder may create. */
 	public async captureDirectory(filePath: string): Promise<void> {
-		let current = URI.file(filePath);
+		let current = this.assertWorkspacePath(URI.file(filePath));
 		let changed = false;
 		while (!await this.fileService.exists(current)) {
 			const key = current.toString();
@@ -111,7 +120,7 @@ export class TaskSnapshotManager {
 	}
 
 	public async capture(filePath: string): Promise<void> {
-		const uri = URI.file(filePath);
+		const uri = this.assertWorkspacePath(URI.file(filePath));
 		const key = uri.toString();
 		const existed = await this.fileService.exists(uri);
 		const content = existed ? (await this.textFileService.read(uri)).value : undefined;
@@ -136,7 +145,7 @@ export class TaskSnapshotManager {
 		for (const snapshot of snapshots) {
 			snapshot.applied = true;
 			snapshot.lastAgentExisted = await this.fileService.exists(uri);
-			snapshot.lastAgentHash = snapshot.lastAgentExisted ? hash((await this.textFileService.read(uri)).value).toString(16) : undefined;
+			snapshot.lastAgentHash = snapshot.lastAgentExisted ? await this.requireCrypto().sha256((await this.textFileService.read(uri)).value) : undefined;
 		}
 		await this.persistDurableState();
 	}
@@ -154,16 +163,20 @@ export class TaskSnapshotManager {
 		]);
 		// Validate every target before writing anything so rollback cannot partially clobber newer work.
 		for (const snapshot of snapshots) {
+			this.assertWorkspacePath(snapshot.uri);
+			if (this.restoreGuard) {await this.restoreGuard(snapshot.uri.fsPath);}
 			const exists = await this.fileService.exists(snapshot.uri);
 			if (exists !== snapshot.lastAgentExisted) {
 				throw new Error(`Rollback conflict: ${snapshot.uri.fsPath} changed after the agent operation.`);
 			}
 			if (exists) {
-				const currentHash = hash((await this.textFileService.read(snapshot.uri)).value).toString(16);
+				const currentHash = await this.requireCrypto().sha256((await this.textFileService.read(snapshot.uri)).value);
 				if (currentHash !== snapshot.lastAgentHash) {throw new Error(`Rollback conflict: ${snapshot.uri.fsPath} has newer changes.`);}
 			}
 		}
 		for (const directory of directories) {
+			this.assertWorkspacePath(directory.uri);
+			if (this.restoreGuard) {await this.restoreGuard(directory.uri.fsPath);}
 			if (!await this.fileService.exists(directory.uri)) {continue;}
 			const stat = await this.fileService.resolve(directory.uri);
 			const unexpectedChild = stat.children?.find(child => !removableChildren.has(child.resource.toString()));
@@ -189,7 +202,7 @@ export class TaskSnapshotManager {
 				const initial = this.snapshots.get(snapshot.uri.toString());
 				if (initial?.applied) {
 					initial.lastAgentExisted = await this.fileService.exists(initial.uri);
-					initial.lastAgentHash = initial.lastAgentExisted ? hash((await this.textFileService.read(initial.uri)).value).toString(16) : undefined;
+					initial.lastAgentHash = initial.lastAgentExisted ? await this.requireCrypto().sha256((await this.textFileService.read(initial.uri)).value) : undefined;
 				}
 			}
 			for (const directory of directories) {this.directories.delete(directory.uri.toString());}
@@ -201,11 +214,13 @@ export class TaskSnapshotManager {
 	private async writeBlob(content: string): Promise<string> {
 		if (!this.durableFolder) {throw new Error('Durable snapshot storage is not initialized.');}
 		if (this.snapshots.size >= TaskSnapshotManager.MAX_DURABLE_FILES) {throw new Error('Durable snapshot file limit reached for this run.');}
-		const encoded = VSBuffer.fromString(content);
+		const encrypted = await this.requireCrypto().encrypt(content);
+		const encoded = VSBuffer.fromString(encrypted);
 		if (this.durableBytes + encoded.byteLength > TaskSnapshotManager.MAX_DURABLE_BYTES) {throw new Error('Durable snapshot byte limit reached for this run.');}
-		const blob = `${generateUuid()}.snapshot`;
+		const blob = `${await this.requireCrypto().sha256(content)}.snapshot`;
 		const temporary = URI.joinPath(this.durableFolder, `${blob}.tmp`);
 		const target = URI.joinPath(this.durableFolder, blob);
+		if (await this.fileService.exists(target)) {return blob;}
 		await this.fileService.writeFile(temporary, encoded);
 		await this.fileService.move(temporary, target, true);
 		this.durableBytes += encoded.byteLength;
@@ -238,13 +253,14 @@ export class TaskSnapshotManager {
 			operationId: snapshot.operationId, groupId: snapshot.groupId, stepId: snapshot.stepId,
 			checkpointId: snapshot.checkpointId, blob: snapshot.blob,
 		});
-		const payload = JSON.stringify({
+		const serialized = JSON.stringify({
 			version: TaskSnapshotManager.SCHEMA_VERSION,
 			updatedAt: Date.now(),
 			snapshots: [...this.snapshots.values()].map(serializeFile),
 			scopedSnapshots: [...this.scopedSnapshots.entries()].map(([key, snapshot]) => ({ key, snapshot: serializeFile(snapshot) })),
 			directories: [...this.directories.values()].map(directory => ({ ...directory, uri: directory.uri.toString() })),
 		}, undefined, 2);
+		const payload = JSON.stringify({ payload: serialized, mac: await this.requireCrypto().sign(serialized) });
 		await this.fileService.writeFile(this.durableTemporaryManifest, VSBuffer.fromString(payload));
 		await this.fileService.move(this.durableTemporaryManifest, this.durableManifest, true);
 	}
@@ -252,7 +268,11 @@ export class TaskSnapshotManager {
 	private async restoreDurableState(): Promise<void> {
 		if (!this.durableFolder || !this.durableManifest) {return;}
 		try {
-			const raw = JSON.parse((await this.fileService.readFile(this.durableManifest)).value.toString()) as {
+			const envelope = JSON.parse((await this.fileService.readFile(this.durableManifest)).value.toString()) as { payload?: string; mac?: string };
+			if (typeof envelope.payload !== 'string' || typeof envelope.mac !== 'string' || !await this.requireCrypto().verify(envelope.payload, envelope.mac)) {
+				throw new Error('Snapshot manifest authentication failed.');
+			}
+			const raw = JSON.parse(envelope.payload) as {
 				version?: number;
 				snapshots?: PersistedFileSnapshot[];
 				scopedSnapshots?: Array<{ key: string; snapshot: PersistedFileSnapshot }>;
@@ -273,12 +293,15 @@ export class TaskSnapshotManager {
 			}
 			for (const directory of raw.directories ?? []) {
 				if (typeof directory.uri !== 'string') {continue;}
-				const snapshot: DirectorySnapshot = { ...directory, uri: URI.parse(directory.uri), applied: directory.applied === true };
+				const snapshot: DirectorySnapshot = { ...directory, uri: this.assertWorkspacePath(URI.parse(directory.uri)), applied: directory.applied === true };
 				this.directories.set(snapshot.uri.toString(), snapshot);
 			}
 			for (const blob of restoredBlobs) {this.durableBytes += (await this.fileService.readFile(URI.joinPath(this.durableFolder, blob))).value.byteLength;}
 		} catch {
 			// Missing or interrupted state cannot authorize rollback. New captures remain durable.
+			this.snapshots.clear();
+			this.scopedSnapshots.clear();
+			this.directories.clear();
 		}
 	}
 
@@ -287,9 +310,50 @@ export class TaskSnapshotManager {
 		let content: string | undefined;
 		if (persisted.existed) {
 			if (typeof persisted.blob !== 'string' || !/^[a-zA-Z0-9-]+\.snapshot$/.test(persisted.blob)) {return undefined;}
-			content = (await this.fileService.readFile(URI.joinPath(this.durableFolder, persisted.blob))).value.toString();
+			content = await this.requireCrypto().decrypt((await this.fileService.readFile(URI.joinPath(this.durableFolder, persisted.blob))).value.toString());
 		}
-		return { ...persisted, uri: URI.parse(persisted.uri), content, applied: persisted.applied === true };
+		const uri = this.assertWorkspacePath(URI.parse(persisted.uri));
+		return { ...persisted, uri, content, applied: persisted.applied === true };
+	}
+
+	public async purge(): Promise<void> {
+		if (this.durableFolder && await this.fileService.exists(this.durableFolder)) {await this.fileService.del(this.durableFolder, { recursive: true });}
+		this.reset();
+	}
+
+	/** Produces a bounded, Git-independent review of changes captured by this run. */
+	public async reviewChanges(path?: string): Promise<string> {
+		const selectedUri = path
+			? isAbsolute(path) ? URI.file(path) : URI.joinPath(this.workspace ?? URI.file(''), path)
+			: undefined;
+		const selectedPath = selectedUri ? normalizeFsPath(this.assertWorkspacePath(selectedUri).fsPath) : undefined;
+		const sections: string[] = [];
+		for (const snapshot of this.snapshots.values()) {
+			if (!snapshot.applied) {continue;}
+			const candidate = normalizeFsPath(snapshot.uri.fsPath);
+			if (selectedPath && candidate !== selectedPath && !candidate.startsWith(`${selectedPath}/`)) {continue;}
+			const exists = await this.fileService.exists(snapshot.uri);
+			const current = exists ? (await this.textFileService.read(snapshot.uri)).value : undefined;
+			if (exists === snapshot.existed && current === snapshot.content) {continue;}
+			const beforeHash = snapshot.content === undefined ? 'absent' : await this.requireCrypto().sha256(snapshot.content);
+			const afterHash = current === undefined ? 'absent' : await this.requireCrypto().sha256(current);
+			const preview = current === undefined ? '[deleted]' : current.length <= 16_000 ? current : `${current.slice(0, 16_000)}\n[truncated; ${current.length - 16_000} chars omitted]`;
+			sections.push(`--- ${snapshot.existed ? snapshot.uri.fsPath : '/dev/null'}\n+++ ${exists ? snapshot.uri.fsPath : '/dev/null'}\n[sha256 ${beforeHash} -> ${afterHash}]\n${preview}`);
+		}
+		return sections.length ? sections.join('\n\n') : 'No snapshot-backed file changes were detected for this path.';
+	}
+
+	private requireCrypto(): AgentStateCrypto {
+		if (!this.stateCrypto) {throw new Error('Durable snapshot encryption is not initialized.');}
+		return this.stateCrypto;
+	}
+
+	private assertWorkspacePath(uri: URI): URI {
+		if (!this.workspace || uri.scheme !== 'file') {throw new Error('Snapshot target is not a local workspace path.');}
+		const workspace = normalizeFsPath(this.workspace.fsPath);
+		const candidate = normalizeFsPath(uri.fsPath);
+		if (candidate !== workspace && !candidate.startsWith(`${workspace}/`)) {throw new Error(`Snapshot target is outside the active workspace: ${uri.fsPath}`);}
+		return uri;
 	}
 
 	private selectSnapshots(selection: RollbackSelection): FileSnapshot[] {
@@ -337,5 +401,6 @@ function directorySelected(snapshot: DirectorySnapshot, selection: RollbackSelec
 }
 
 function normalizeFsPath(value: string): string {
-	return value.replace(/\\/g, '/').replace(/\/$/, '').toLowerCase();
+	const normalized = value.replace(/\\/g, '/').replace(/\/$/, '');
+	return isLinux ? normalized : normalized.toLowerCase();
 }

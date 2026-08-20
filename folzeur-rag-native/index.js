@@ -310,11 +310,20 @@ if (!nativeBinding) {
   throw new Error(`Failed to load native binding`)
 }
 
-const { indexProject, cancelIndexProject, getIndexStats, searchCode, evaluateRanking, hybridSearch } = nativeBinding
+const { indexProject, indexFile, deleteFile, renameFile, applyFileEvents, cancelIndexProject, getIndexStats, validateIndex, listIndexedFiles, getModelStatus, installModel, setModelDownloadAllowed, searchCode, evaluateRanking, hybridSearch } = nativeBinding
 
 module.exports.indexProject = indexProject
+module.exports.indexFile = indexFile
+module.exports.deleteFile = deleteFile
+module.exports.renameFile = renameFile
+module.exports.applyFileEvents = applyFileEvents
 module.exports.cancelIndexProject = cancelIndexProject
 module.exports.getIndexStats = getIndexStats
+module.exports.validateIndex = validateIndex
+module.exports.listIndexedFiles = listIndexedFiles
+module.exports.getModelStatus = getModelStatus
+module.exports.installModel = installModel
+module.exports.setModelDownloadAllowed = setModelDownloadAllowed
 module.exports.searchCode = searchCode
 module.exports.evaluateRanking = evaluateRanking
 module.exports.hybridSearch = hybridSearch

@@ -8,8 +8,17 @@ export interface SearchConfig {
   similarityThreshold?: number
 }
 export declare function indexProject(workspacePath: string, excludePatterns?: Array<string> | undefined | null): Promise<number>
+export declare function indexFile(workspacePath: string, filePath: string, excludePatterns?: Array<string> | undefined | null): Promise<number>
+export declare function deleteFile(workspacePath: string, filePath: string): Promise<number>
+export declare function renameFile(workspacePath: string, oldPath: string, newPath: string, excludePatterns?: Array<string> | undefined | null): Promise<number>
+export declare function applyFileEvents(workspacePath: string, upsertPaths: Array<string>, deletedPaths: Array<string>, excludePatterns?: Array<string> | undefined | null): Promise<number>
 export declare function cancelIndexProject(workspacePath: string): void
 export declare function getIndexStats(workspacePath: string): string
+export declare function validateIndex(workspacePath: string, autoRebuild?: boolean | undefined | null): Promise<string>
+export declare function listIndexedFiles(workspacePath: string): string
+export declare function getModelStatus(): string
+export declare function installModel(allowDownload?: boolean | undefined | null): Promise<void>
+export declare function setModelDownloadAllowed(allowed: boolean): void
 export declare function searchCode(workspacePath: string, query: string, topK: number, config?: SearchConfig | undefined | null): Promise<string>
 /**
  * Evaluates a ranked fixture without loading the embedding model. This is used

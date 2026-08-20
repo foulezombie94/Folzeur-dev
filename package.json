@@ -147,6 +147,7 @@
     "@xterm/addon-webgl": "^0.20.0-beta.290",
     "@xterm/headless": "^6.1.0-beta.291",
     "@xterm/xterm": "^6.1.0-beta.291",
+    "ajv": "^8.18.0",
     "chrome-remote-interface": "^0.33.0",
     "detect-libc": "^2.1.2",
     "diff": "^9.0.0",

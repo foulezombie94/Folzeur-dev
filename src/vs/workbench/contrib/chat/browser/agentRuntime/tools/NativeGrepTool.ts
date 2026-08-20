@@ -48,7 +48,17 @@ export class NativeGrepTool implements INativeTool {
 					isCaseSensitive: parameters.caseSensitive === true,
 				},
 				includePattern: parameters.includes?.trim() ? { [parameters.includes.trim()]: true } : undefined,
-				excludePattern: { '**/.env': true, '**/.env.*': true, '**/*.pem': true, '**/*.key': true, '**/*.p12': true, '**/*.pfx': true, '**/credentials.json': true, '**/secrets.json': true, '**/id_rsa': true, '**/id_ed25519': true, '**/.npmrc': true, '**/.pypirc': true },
+				excludePattern: {
+					'**/.history/**': true, '**/.idea/**': true, '**/.vscode/**': true,
+					'**/.env': true, '**/.env.*': true,
+					'**/*.pem': true, '**/*.der': true, '**/*.key': true, '**/*.p12': true, '**/*.pfx': true,
+					'**/*.jks': true, '**/*.keystore': true, '**/*.ovpn': true,
+					'**/*.sqlite': true, '**/*.sqlite3': true, '**/*.db': true, '**/*.sql': true, '**/*.dump': true,
+					'**/*.log': true, '**/.DS_Store': true, '**/Thumbs.db': true,
+					'**/credentials.json': true, '**/secrets.json': true,
+					'**/id_rsa': true, '**/id_dsa': true, '**/id_ecdsa': true, '**/id_ed25519': true,
+					'**/.npmrc': true, '**/.pypirc': true
+				},
 				maxResults: 5000,
 				previewOptions: { matchLines: 1, charsPerLine: 300 },
 			};

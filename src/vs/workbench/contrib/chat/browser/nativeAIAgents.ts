@@ -18,6 +18,7 @@ import { Disposable } from '../../../../base/common/lifecycle.js';
 import { timeout } from '../../../../base/common/async.js';
 import * as nls from '../../../../nls.js';
 import { CommandsRegistry } from '../../../../platform/commands/common/commands.js';
+import { MenuId, MenuRegistry } from '../../../../platform/actions/common/actions.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { ExtensionIdentifier } from '../../../../platform/extensions/common/extensions.js';
 import { ChatAgentLocation, ChatModeKind } from '../common/constants.js';
@@ -35,6 +36,7 @@ import { AgentSessionModel } from './agentRuntime/AgentSessionModel.js';
 import { AgentChatProgressAdapter } from './agentRuntime/ui/AgentChatProgressAdapter.js';
 import { ITerminalService } from '../../terminal/browser/terminal.js';
 import { LocalAppServerRegistry } from './agentRuntime/utils/LocalAppServerRegistry.js';
+import { rustEngine } from './agentRuntime/native/rustEngine.js';
 
 export const NATIVE_AGENT_ID = 'native.api';
 
@@ -64,6 +66,11 @@ export class NativeAIAgents extends Disposable {
 			id: 'folzeur.agent.setApiKey',
 			handler: async () => this.promptForApiKey()
 		}));
+		this._register(CommandsRegistry.registerCommand({
+			id: 'folzeur.agent.showLocalCodeIndex',
+			handler: async () => this.showLocalCodeIndex()
+		}));
+		this._register(MenuRegistry.appendMenuItem(MenuId.CommandPalette, { command: { id: 'folzeur.agent.showLocalCodeIndex', title: nls.localize('folzeur.agent.showLocalCodeIndex', "Folzeur: Show Local Code Index") } }));
 		this._register(CommandsRegistry.registerCommand({
 			id: 'folzeur.agent.clearApiKey',
 			handler: async () => this.clearApiKey()
@@ -96,6 +103,21 @@ export class NativeAIAgents extends Disposable {
 		});
 		this._register(this.languageModelsService.registerLanguageModelProvider(FOLZEUR_LM_VENDOR, this.folzeurLanguageModelProvider));
 		this.folzeurLanguageModelProvider.notifyChanged();
+	}
+
+	private async showLocalCodeIndex(): Promise<void> {
+		const folder = this.workspaceContextService.getWorkspace().folders[0]?.uri;
+		if (!folder) {return;}
+		const report = await rustEngine.getIndexPrivacyReport(folder.fsPath);
+		const health = report.health && typeof report.health === 'object' ? JSON.stringify(report.health) : String(report.health);
+		const model = report.model && typeof report.model === 'object' ? JSON.stringify(report.model) : String(report.model);
+		const action = await this.quickInputService.pick([
+			{ label: '$(refresh) Rebuild local code index', id: 'rebuild', description: 'Recreate the committed local generation.' },
+			{ label: '$(cloud-download) Install local embedding model', id: 'install', description: 'Downloads model files only after this explicit action.' },
+			...report.files.slice(0, 10_000).map(file => ({ label: file, id: 'file', description: 'Indexed locally' })),
+		], { title: `Local Code Index — ${report.files.length} files`, placeHolder: `Health: ${health} · Model: ${model}` });
+		if (action?.id === 'rebuild') {await rustEngine.rebuildWorkspaceIndex(folder.fsPath);}
+		if (action?.id === 'install') {await rustEngine.installEmbeddingModel();}
 	}
 
 	private async promptForApiKey(): Promise<void> {

@@ -82,10 +82,11 @@ const ABSOLUTE_HARD_DURATION_MS = 6 * 60 * 60_000;
 /** Reclassifiable adaptive budget. Discoveries can expand soft/hard envelopes up to absolute safety limits. */
 export class AdaptiveAgentBudget {
 	private value: AgentBudgetSnapshot;
-	private readonly startedAt: number;
+	private windowStartedAt: number;
 	private lastCheckpointIteration = 0;
 	private lastReplanIteration = -10;
-	constructor(classification: AgentTaskClassification, now = Date.now()) { this.startedAt = now; this.value = this.calculate(classification, 0, now); }
+	private continuationWindows = 0;
+	constructor(classification: AgentTaskClassification, now = Date.now()) { this.windowStartedAt = now; this.value = this.calculate(classification, 0, now); }
 	get snapshot(): AgentBudgetSnapshot { return this.value; }
 	reclassify(classification: AgentTaskClassification, usage: Pick<AgentBudgetUsage, 'iterations' | 'toolCalls'>, now = Date.now()): boolean {
 		if (sameClassification(this.value.classification, classification)) {return false;}
@@ -107,6 +108,14 @@ export class AdaptiveAgentBudget {
 		}
 		return { action: 'continue' };
 	}
+	continueAfterHardCheckpoint(usage: AgentBudgetUsage, now = Date.now()): boolean {
+		if (this.value.classification.kind !== 'long_running_task' || usage.stagnationLevel >= 4 || usage.iterationsSinceProgress > 10 || this.continuationWindows >= 28) {return false;}
+		this.continuationWindows++;
+		this.windowStartedAt = now;
+		this.value = this.calculate(this.value.classification, this.value.revision + 1, now, usage);
+		this.lastCheckpointIteration = usage.iterations;
+		return true;
+	}
 	private calculate(classification: AgentTaskClassification, revision: number, now: number, usage?: Pick<AgentBudgetUsage, 'iterations' | 'toolCalls'>): AgentBudgetSnapshot {
 		const profile = BUDGET_PROFILES[classification.kind];
 		const fileFactor = Math.min(3, Math.log2(Math.max(1, classification.estimatedFiles)) / 3);
@@ -114,11 +123,11 @@ export class AdaptiveAgentBudget {
 		return {
 			classification, revision,
 			softIterations: Math.max((usage?.iterations ?? 0) + 3, Math.ceil(profile.iterations[0] * factor)),
-			hardIterations: Math.min(ABSOLUTE_HARD_ITERATIONS, Math.max((usage?.iterations ?? 0) + 10, Math.ceil(profile.iterations[1] * factor))),
+			hardIterations: (usage?.iterations ?? 0) + Math.min(ABSOLUTE_HARD_ITERATIONS, Math.max(10, Math.ceil(profile.iterations[1] * factor))),
 			softToolCalls: Math.max((usage?.toolCalls ?? 0) + 8, Math.ceil(profile.tools[0] * factor)),
-			hardToolCalls: Math.min(ABSOLUTE_HARD_TOOL_CALLS, Math.max((usage?.toolCalls ?? 0) + 30, Math.ceil(profile.tools[1] * factor))),
-			softDeadlineMs: Math.max(now + 60_000, this.startedAt + Math.ceil(profile.minutes[0] * factor) * 60_000),
-			hardDeadlineMs: Math.min(this.startedAt + ABSOLUTE_HARD_DURATION_MS, Math.max(now + 5 * 60_000, this.startedAt + Math.ceil(profile.minutes[1] * factor) * 60_000)),
+			hardToolCalls: (usage?.toolCalls ?? 0) + Math.min(ABSOLUTE_HARD_TOOL_CALLS, Math.max(30, Math.ceil(profile.tools[1] * factor))),
+			softDeadlineMs: Math.max(now + 60_000, this.windowStartedAt + Math.ceil(profile.minutes[0] * factor) * 60_000),
+			hardDeadlineMs: Math.min(this.windowStartedAt + ABSOLUTE_HARD_DURATION_MS, Math.max(now + 5 * 60_000, this.windowStartedAt + Math.ceil(profile.minutes[1] * factor) * 60_000)),
 		};
 	}
 }

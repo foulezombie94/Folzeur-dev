@@ -8,6 +8,7 @@ import { generateUuid } from '../../../../../../base/common/uuid.js';
 import { URI } from '../../../../../../base/common/uri.js';
 import { IFileService } from '../../../../../../platform/files/common/files.js';
 import { redactSecrets } from './SecretProtection.js';
+import { AgentStateCrypto } from './AgentStateCrypto.js';
 
 export interface JournalEntry {
 	readonly timestamp: number;
@@ -46,7 +47,7 @@ export class TaskJournal {
 	private writeChain = Promise.resolve();
 	private checkpointState: TaskCheckpoint | undefined;
 
-	constructor(private readonly fileService: IFileService, workspace: URI, taskId = generateUuid()) {
+	constructor(private readonly fileService: IFileService, workspace: URI, private readonly stateCrypto: AgentStateCrypto, taskId = generateUuid()) {
 		this.folder = URI.joinPath(workspace, '.folzeur', 'agent-state');
 		const safeTaskId = taskId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(-160) || generateUuid();
 		this.resource = URI.joinPath(this.folder, `${safeTaskId}.json`);
@@ -55,9 +56,17 @@ export class TaskJournal {
 
 	/** Loads the last bounded checkpoint for this chat session, if the prior process stopped unexpectedly. */
 	public async initialize(): Promise<TaskCheckpoint | undefined> {
+		if (!await this.fileService.exists(this.resource)) {
+			void this.garbageCollect();
+			return undefined;
+		}
 		try {
 			const raw = (await this.fileService.readFile(this.resource)).value.toString();
-			const parsed = JSON.parse(raw) as { version?: number; entries?: JournalEntry[]; checkpoint?: TaskCheckpoint };
+			const envelope = JSON.parse(raw) as { payload?: string; mac?: string };
+			if (typeof envelope.payload !== 'string' || typeof envelope.mac !== 'string' || !await this.stateCrypto.verify(envelope.payload, envelope.mac)) {
+				throw new Error('Task journal authentication failed.');
+			}
+			const parsed = JSON.parse(envelope.payload) as { version?: number; entries?: JournalEntry[]; checkpoint?: TaskCheckpoint };
 			if (typeof parsed.version === 'number' && parsed.version > TaskJournal.SCHEMA_VERSION) {return undefined;}
 			if (Array.isArray(parsed.entries)) {
 				this.entries.push(...parsed.entries.slice(-TaskJournal.MAX_ENTRIES).filter(entry => entry && Number.isFinite(entry.timestamp) && typeof entry.kind === 'string' && typeof entry.detail === 'string'));
@@ -65,8 +74,10 @@ export class TaskJournal {
 			if (parsed.checkpoint && typeof parsed.checkpoint === 'object' && typeof parsed.checkpoint.status === 'string' && parsed.checkpoint.state && typeof parsed.checkpoint.state === 'object') {
 				this.checkpointState = parsed.checkpoint;
 			}
-		} catch {
-			// A missing, partial, or old journal is treated as no checkpoint.
+		} catch (error) {
+			this.entries.length = 0;
+			this.checkpointState = undefined;
+			throw new Error(`Existing task journal is corrupt or unauthenticated; recovery was refused: ${error instanceof Error ? error.message : String(error)}`);
 		}
 		void this.garbageCollect();
 		return this.checkpointState;
@@ -75,7 +86,7 @@ export class TaskJournal {
 	public record(kind: string, detail: string): Promise<void> {
 		this.entries.push({ timestamp: Date.now(), kind: kind.slice(0, 80), detail: redactSecrets(detail).slice(0, 4000) });
 		this.boundEntries();
-		this.writeChain = this.writeChain.then(() => this.flush(), () => this.flush()).catch(() => { /* telemetry must never fail the task */ });
+		this.writeChain = this.writeChain.then(() => this.flush(), () => this.flush());
 		return this.writeChain;
 	}
 
@@ -89,7 +100,7 @@ export class TaskJournal {
 		};
 		this.entries.push(sanitized);
 		this.boundEntries();
-		this.writeChain = this.writeChain.then(() => this.flush(), () => this.flush()).catch(() => { /* journal failure must never fail the task */ });
+		this.writeChain = this.writeChain.then(() => this.flush(), () => this.flush());
 		return this.writeChain;
 	}
 
@@ -97,11 +108,11 @@ export class TaskJournal {
 		let safeState: Readonly<Record<string, unknown>> = {};
 		try {
 			safeState = JSON.parse(redactSecrets(JSON.stringify(state))) as Readonly<Record<string, unknown>>;
-		} catch {
-			// Persist an empty state rather than allowing journal serialization to fail the task.
+		} catch (error) {
+			throw new Error(`Task checkpoint is not serializable: ${error instanceof Error ? error.message : String(error)}`);
 		}
 		this.checkpointState = { status, state: safeState, updatedAt: Date.now() };
-		this.writeChain = this.writeChain.then(() => this.flush(), () => this.flush()).catch(() => { /* telemetry must never fail the task */ });
+		this.writeChain = this.writeChain.then(() => this.flush(), () => this.flush());
 		return this.writeChain;
 	}
 
@@ -112,7 +123,8 @@ export class TaskJournal {
 			this.entries.splice(0, Math.min(25, this.entries.length - 20));
 			serialized = JSON.stringify({ version: TaskJournal.SCHEMA_VERSION, updatedAt: Date.now(), checkpoint: this.checkpointState, entries: this.entries }, undefined, 2);
 		}
-		const payload = VSBuffer.fromString(serialized);
+		const envelope = JSON.stringify({ payload: serialized, mac: await this.stateCrypto.sign(serialized) });
+		const payload = VSBuffer.fromString(envelope);
 		await this.fileService.writeFile(this.temporaryResource, payload);
 		await this.fileService.move(this.temporaryResource, this.resource, true);
 	}

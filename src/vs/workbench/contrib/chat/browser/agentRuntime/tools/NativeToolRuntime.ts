@@ -5,26 +5,13 @@
 
 import { IChatProgress } from '../../../common/chatService/chatService.js';
 import { INativeTool } from './INativeTool.js';
-import { CancellationToken } from '../../../../../../base/common/cancellation.js';
+import { CancellationToken, CancellationTokenSource } from '../../../../../../base/common/cancellation.js';
 import { IDisposable } from '../../../../../../base/common/lifecycle.js';
 import { redactSecrets } from '../utils/SecretProtection.js';
 import { hashToolParameters, isMutationEffect, resolveNativeToolPolicy } from './NativeToolPolicyRegistry.js';
-import { hasKey } from '../../../../../../base/common/types.js';
-
-interface JsonSchema {
-	readonly type?: 'object' | 'array' | 'string' | 'number' | 'integer' | 'boolean';
-	readonly properties?: Readonly<Record<string, JsonSchema>>;
-	readonly required?: readonly string[];
-	readonly enum?: readonly unknown[];
-	readonly items?: JsonSchema;
-	readonly minimum?: number;
-	readonly maximum?: number;
-	readonly minLength?: number;
-	readonly maxLength?: number;
-	readonly minItems?: number;
-	readonly maxItems?: number;
-	readonly additionalProperties?: boolean;
-}
+// Ajv is the runtime trust-boundary validator and is shipped as a direct product dependency.
+// eslint-disable-next-line local/code-import-patterns, local/code-amd-node-module
+import { Ajv, type ValidateFunction } from 'ajv';
 
 const MAX_PARAMETER_CHARACTERS = 2_000_000;
 
@@ -34,14 +21,20 @@ export class NativeToolRuntime {
 	private readonly inFlight = new Map<string, Promise<unknown>>();
 	private readonly resourceTails = new Map<string, Promise<void>>();
 	private active = 0;
+	private readonly schemaValidator = new Ajv({ allErrors: true, strict: false, allowUnionTypes: true, validateFormats: true });
+	private readonly compiledSchemas = new WeakMap<INativeTool, ValidateFunction>();
 
 	constructor(private readonly maxConcurrency = 4) { }
 
 	public validate(tool: INativeTool, parameters: unknown): void {
-		const errors: string[] = [];
-		validateValue(parameters, tool.inputSchema as JsonSchema, '$', errors);
-		if (errors.length) {
-			throw new Error(`Invalid parameters for ${tool.name}: ${errors.slice(0, 8).join('; ')}`);
+		let validate = this.compiledSchemas.get(tool);
+		if (!validate) {
+			const compiled = this.schemaValidator.compile(tool.inputSchema);
+			this.compiledSchemas.set(tool, compiled);
+			validate = compiled;
+		}
+		if (!validate(parameters)) {
+			throw new Error(`Invalid parameters for ${tool.name}: ${(validate.errors ?? []).slice(0, 8).map(error => `${error.instancePath || '$'} ${error.message ?? 'is invalid'}`).join('; ')}`);
 		}
 		this.validateSemantic(parameters);
 	}
@@ -55,11 +48,17 @@ export class NativeToolRuntime {
 		}
 		if (token.isCancellationRequested) {throw new Error('Tool execution cancelled.');}
 		const resources = isMutationEffect(policy.effect) ? mutationResources(parameters, cwd, policy.targetKeys) : [];
-		const operation = this.runBounded(() => this.withResourceLocks(resources, async () => sanitizeResult(await tool.execute(parameters, cwd, progress, token)), token), token);
+		const operationToken = new CancellationTokenSource(token);
+		const timeoutMs = toolTimeoutMs(policy.effect, parameters);
+		const operation = this.runBounded(() => this.withResourceLocks(resources, async () => sanitizeResult(await tool.execute(parameters, cwd, progress, operationToken.token)), operationToken.token), operationToken.token);
 		if (key) {this.inFlight.set(key, operation);}
 		try {
-			return await operation;
+			return await new Promise<unknown>((resolve, reject) => {
+				const timer = setTimeout(() => {operationToken.cancel(); reject(new Error(`Tool ${tool.name} timed out after ${timeoutMs} ms.`));}, timeoutMs);
+				operation.then(value => {clearTimeout(timer); resolve(value);}, error => {clearTimeout(timer); reject(error);});
+			});
 		} finally {
+			operationToken.dispose(true);
 			if (key) {this.inFlight.delete(key);}
 		}
 	}
@@ -111,9 +110,10 @@ export class NativeToolRuntime {
 					cancelled = true;
 					const index = this.pending.indexOf(entry);
 					if (index >= 0) {this.pending.splice(index, 1);}
+					entry.cancellation.dispose();
 					reject(new Error('Tool execution cancelled while waiting for capacity.'));
 				});
-				if (!cancelled) {this.pending.push(entry);}
+				if (cancelled) {entry.cancellation.dispose();} else {this.pending.push(entry);}
 			});
 		}
 		if (token.isCancellationRequested) {throw new Error('Tool execution cancelled.');}
@@ -127,15 +127,27 @@ export class NativeToolRuntime {
 	}
 }
 
+function toolTimeoutMs(effect: ReturnType<typeof resolveNativeToolPolicy>['effect'], parameters: Readonly<Record<string, unknown>>): number {
+	const requested = Number(parameters.timeoutMs);
+	if (Number.isFinite(requested)) {return Math.max(1_000, Math.min(requested, 3_600_000));}
+	if (effect === 'verification') {return 15 * 60_000;}
+	if (effect === 'mutation' || effect === 'external_mutation') {return 5 * 60_000;}
+	if (effect === 'external_read' || effect === 'external_interaction') {return 60_000;}
+	return 30_000;
+}
+
 function waitForPromisesOrCancellation(promises: readonly Promise<void>[], token: CancellationToken): Promise<void> {
 	if (token.isCancellationRequested) {return Promise.reject(new Error('Tool execution cancelled while waiting for a resource lock.'));}
 	return new Promise<void>((resolve, reject) => {
 		let settled = false;
-		const cancellation = token.onCancellationRequested(() => {
+		let cancellation: IDisposable = { dispose() { } };
+		cancellation = token.onCancellationRequested(() => {
 			if (settled) {return;}
 			settled = true;
+			cancellation.dispose();
 			reject(new Error('Tool execution cancelled while waiting for a resource lock.'));
 		});
+		if (settled) {cancellation.dispose();}
 		Promise.all(promises).then(() => {
 			if (settled) {return;}
 			settled = true;
@@ -173,36 +185,4 @@ function sanitizeResult<T>(value: T, depth = 0): T {
 		return result as T;
 	}
 	return value;
-}
-
-function validateValue(value: unknown, schema: JsonSchema | undefined, path: string, errors: string[]): void {
-	if (!schema || errors.length >= 8) {return;}
-	if (schema.enum && !schema.enum.some(candidate => candidate === value)) {errors.push(`${path} must be one of ${schema.enum.join(', ')}`);}
-	if (schema.type === 'object') {
-		if (!value || typeof value !== 'object' || Array.isArray(value)) { errors.push(`${path} must be an object`); return; }
-		const record = value as Record<string, unknown>;
-		for (const required of schema.required ?? []) {if (!hasKey(record, { [required]: true })) {errors.push(`${path}.${required} is required`);}}
-		for (const [key, child] of Object.entries(schema.properties ?? {})) {if (hasKey(record, { [key]: true })) {validateValue(record[key], child, `${path}.${key}`, errors);}}
-		if (schema.additionalProperties === false) {for (const key of Object.keys(record)) {if (!hasKey(schema.properties ?? {}, { [key]: true })) {errors.push(`${path}.${key} is not allowed`);}}}
-		return;
-	}
-	if (schema.type === 'array') {
-		if (!Array.isArray(value)) { errors.push(`${path} must be an array`); return; }
-		if (schema.minItems !== undefined && value.length < schema.minItems) {errors.push(`${path} must contain at least ${schema.minItems} items`);}
-		if (schema.maxItems !== undefined && value.length > schema.maxItems) {errors.push(`${path} must contain at most ${schema.maxItems} items`);}
-		value.forEach((item, index) => validateValue(item, schema.items, `${path}[${index}]`, errors));
-		return;
-	}
-	if (schema.type === 'string') {
-		if (typeof value !== 'string') { errors.push(`${path} must be a string`); return; }
-		if (schema.minLength !== undefined && value.length < schema.minLength) {errors.push(`${path} is too short`);}
-		if (schema.maxLength !== undefined && value.length > schema.maxLength) {errors.push(`${path} is too long`);}
-		return;
-	}
-	if (schema.type === 'boolean' && typeof value !== 'boolean') {errors.push(`${path} must be a boolean`);}
-	if ((schema.type === 'number' || schema.type === 'integer')) {
-		if (typeof value !== 'number' || !Number.isFinite(value) || (schema.type === 'integer' && !Number.isInteger(value))) { errors.push(`${path} must be a finite ${schema.type}`); return; }
-		if (schema.minimum !== undefined && value < schema.minimum) {errors.push(`${path} must be >= ${schema.minimum}`);}
-		if (schema.maximum !== undefined && value > schema.maximum) {errors.push(`${path} must be <= ${schema.maximum}`);}
-	}
 }

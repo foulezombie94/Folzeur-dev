@@ -121,8 +121,21 @@ export function isNetworkEnabled(configurationService: IConfigurationService, ca
 	return configurationService.getValue<boolean>('chat.api.allowBrowser') !== false;
 }
 
-/** GET-only, redirect-free request with DNS pinning, cancellation, timeout and a response-size bound. */
-export async function fetchWithPolicy(rawUrl: URL, token: CancellationToken, timeoutMs = 15_000, maxBytes = 2 * 1024 * 1024): Promise<AgentNetworkResponse> {
+/** GET-only request with DNS pinning and validation repeated at every redirect hop. */
+export async function fetchWithPolicy(rawUrl: URL, token: CancellationToken, timeoutMs = 15_000, maxBytes = 2 * 1024 * 1024, headers: Readonly<Record<string, string>> = {}): Promise<AgentNetworkResponse> {
+	let current = rawUrl;
+	for (let redirect = 0; redirect <= 5; redirect++) {
+		const response = await requestOnceWithPolicy(current, token, timeoutMs, maxBytes, headers);
+		if (![301, 302, 303, 307, 308].includes(response.status)) {return response;}
+		const location = response.headers.get('location');
+		if (!location) {throw new Error(`HTTP redirect ${response.status} did not include a Location header.`);}
+		if (redirect === 5) {throw new Error('Network request exceeded the maximum of 5 redirects.');}
+		current = (await resolvePublicHttpUrl(new URL(location, current))).url;
+	}
+	throw new Error('Network redirect validation failed.');
+}
+
+async function requestOnceWithPolicy(rawUrl: URL, token: CancellationToken, timeoutMs: number, maxBytes: number, extraHeaders: Readonly<Record<string, string>>): Promise<AgentNetworkResponse> {
 	const { url, addresses } = await resolvePublicHttpUrl(rawUrl);
 	const transport = builtinModule<HttpModule>(url.protocol === 'https:' ? 'https' : 'http');
 	if (!transport) {throw new Error('Secure network transport is unavailable in this workbench.');}
@@ -158,7 +171,7 @@ export async function fetchWithPolicy(rawUrl: URL, token: CancellationToken, tim
 			port: url.port || undefined,
 			path: `${url.pathname}${url.search}`,
 			method: 'GET',
-			headers: { 'user-agent': 'Folzeur-Agent/1.0', host: url.host, accept: '*/*' },
+			headers: { 'user-agent': 'Folzeur-Agent/1.0', host: url.host, accept: '*/*', ...extraHeaders },
 			servername: url.hostname.replace(/^\[|\]$/g, ''),
 			lookup: (_hostname: string, _options: unknown, callback: (error: Error | null, address?: string, family?: number) => void) => callback(null, selected.address, selected.family),
 		}, response => {

@@ -32,6 +32,7 @@ fn imports(root: Node<'_>, source: &[u8]) -> String {
         let kind = child.kind();
         let is_import = kind == "import_statement"
             || kind == "import_declaration"
+            || kind == "use_declaration"
             || (kind == "lexical_declaration"
                 && std::str::from_utf8(&source[child.start_byte()..child.end_byte()])
                     .is_ok_and(|text| text.contains("require(")));
@@ -121,6 +122,15 @@ fn has_strategic_child(node: Node<'_>) -> bool {
                 | "method_definition"
                 | "interface_declaration"
                 | "arrow_function"
+                | "function_item"
+                | "impl_item"
+                | "trait_item"
+                | "struct_item"
+                | "enum_item"
+                | "function_definition"
+                | "class_definition"
+                | "method_declaration"
+                | "type_declaration"
         ) || has_strategic_child(child)
     });
     found
@@ -135,6 +145,15 @@ fn walk_ast(node: Node<'_>, source: &[u8], chunks: &mut Vec<CodeChunk>, global_i
             | "method_definition"
             | "interface_declaration"
             | "arrow_function"
+            | "function_item"
+            | "impl_item"
+            | "trait_item"
+            | "struct_item"
+            | "enum_item"
+            | "function_definition"
+            | "class_definition"
+            | "method_declaration"
+            | "type_declaration"
     );
 
     // A class containing methods is only a container. Index its methods to avoid
@@ -163,12 +182,24 @@ fn module_scope_chunks(root: Node<'_>, source: &[u8], global_imports: &str) -> V
     let mut chunks = Vec::new();
     let mut cursor = root.walk();
     for child in root.named_children(&mut cursor) {
-        if matches!(child.kind(), "import_statement" | "import_declaration")
-            || matches!(
-                child.kind(),
-                "function_declaration" | "class_declaration" | "interface_declaration"
-            )
-            || has_strategic_child(child)
+        if matches!(
+            child.kind(),
+            "import_statement" | "import_declaration" | "use_declaration"
+        ) || matches!(
+            child.kind(),
+            "function_declaration"
+                | "class_declaration"
+                | "interface_declaration"
+                | "function_item"
+                | "impl_item"
+                | "trait_item"
+                | "struct_item"
+                | "enum_item"
+                | "function_definition"
+                | "class_definition"
+                | "method_declaration"
+                | "type_declaration"
+        ) || has_strategic_child(child)
         {
             continue;
         }
@@ -205,21 +236,30 @@ fn assign_stable_ids(chunks: &mut [CodeChunk]) {
 }
 
 thread_local! {
-    static JS_PARSER: std::cell::RefCell<Parser> = std::cell::RefCell::new({
-        let mut parser = Parser::new();
-        parser.set_language(&tree_sitter_javascript::LANGUAGE.into()).unwrap();
+    static JS_PARSER: std::cell::RefCell<Option<Parser>> = std::cell::RefCell::new(parser_for(tree_sitter_javascript::LANGUAGE.into()));
+    static TS_PARSER: std::cell::RefCell<Option<Parser>> = std::cell::RefCell::new(parser_for(tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()));
+    static TSX_PARSER: std::cell::RefCell<Option<Parser>> = std::cell::RefCell::new(parser_for(tree_sitter_typescript::LANGUAGE_TSX.into()));
+    static RUST_PARSER: std::cell::RefCell<Option<Parser>> = std::cell::RefCell::new(parser_for(tree_sitter_rust::LANGUAGE.into()));
+    static PYTHON_PARSER: std::cell::RefCell<Option<Parser>> = std::cell::RefCell::new(parser_for(tree_sitter_python::LANGUAGE.into()));
+    static GO_PARSER: std::cell::RefCell<Option<Parser>> = std::cell::RefCell::new(parser_for(tree_sitter_go::LANGUAGE.into()));
+}
+
+fn parser_for(language: tree_sitter::Language) -> Option<Parser> {
+    let mut parser = Parser::new();
+    parser.set_language(&language).ok()?;
+    Some(parser)
+}
+
+fn parse_with(
+    parser: &'static std::thread::LocalKey<std::cell::RefCell<Option<Parser>>>,
+    content: &str,
+) -> Option<tree_sitter::Tree> {
+    parser.with(|parser| {
         parser
-    });
-    static TS_PARSER: std::cell::RefCell<Parser> = std::cell::RefCell::new({
-        let mut parser = Parser::new();
-        parser.set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()).unwrap();
-        parser
-    });
-    static TSX_PARSER: std::cell::RefCell<Parser> = std::cell::RefCell::new({
-        let mut parser = Parser::new();
-        parser.set_language(&tree_sitter_typescript::LANGUAGE_TSX.into()).unwrap();
-        parser
-    });
+            .borrow_mut()
+            .as_mut()
+            .and_then(|parser| parser.parse(content, None))
+    })
 }
 
 pub fn parse_and_chunk(file_path: &str, content: &str) -> Result<Vec<CodeChunk>> {
@@ -228,14 +268,20 @@ pub fn parse_and_chunk(file_path: &str, content: &str) -> Result<Vec<CodeChunk>>
     }
     let lower = file_path.to_ascii_lowercase();
     let tree = if lower.ends_with(".tsx") {
-        TSX_PARSER.with(|parser| parser.borrow_mut().parse(content, None))
+        parse_with(&TSX_PARSER, content)
     } else if lower.ends_with(".ts") {
-        TS_PARSER.with(|parser| parser.borrow_mut().parse(content, None))
+        parse_with(&TS_PARSER, content)
     } else if [".js", ".jsx", ".mjs", ".cjs"]
         .iter()
         .any(|extension| lower.ends_with(extension))
     {
-        JS_PARSER.with(|parser| parser.borrow_mut().parse(content, None))
+        parse_with(&JS_PARSER, content)
+    } else if lower.ends_with(".rs") {
+        parse_with(&RUST_PARSER, content)
+    } else if lower.ends_with(".py") {
+        parse_with(&PYTHON_PARSER, content)
+    } else if lower.ends_with(".go") {
+        parse_with(&GO_PARSER, content)
     } else {
         None
     };
@@ -283,6 +329,18 @@ mod tests {
         )
         .unwrap();
         assert!(chunks.iter().any(|chunk| chunk.name == "View"));
+    }
+
+    #[test]
+    fn parses_priority_non_javascript_languages_with_ast_boundaries() {
+        let rust = parse_and_chunk("lib.rs", "pub fn answer() -> u32 { 42 }").expect("Rust chunks");
+        let python =
+            parse_and_chunk("main.py", "def answer():\n    return 42").expect("Python chunks");
+        let go = parse_and_chunk("main.go", "package main\nfunc answer() int { return 42 }")
+            .expect("Go chunks");
+        assert!(rust.iter().any(|chunk| chunk.name == "answer"));
+        assert!(python.iter().any(|chunk| chunk.name == "answer"));
+        assert!(go.iter().any(|chunk| chunk.name == "answer"));
     }
 
     #[test]

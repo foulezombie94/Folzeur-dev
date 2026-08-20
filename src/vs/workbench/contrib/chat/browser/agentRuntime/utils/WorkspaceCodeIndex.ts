@@ -7,6 +7,7 @@ import { Disposable } from '../../../../../../base/common/lifecycle.js';
 import { URI } from '../../../../../../base/common/uri.js';
 import { IFileService } from '../../../../../../platform/files/common/files.js';
 import { VSBuffer } from '../../../../../../base/common/buffer.js';
+import { IgnoreFile } from '../../../../../services/search/common/ignoreFile.js';
 import { rustEngine } from '../native/rustEngine.js';
 import { isSensitivePath } from './SecretProtection.js';
 
@@ -24,6 +25,7 @@ const OVERLAP = 20;
 const MAX_FILE_BYTES = 2_000_000;
 const MAX_PERSISTED_INDEX_BYTES = 128_000_000;
 const INDEX_FILE = '.folzeur/workspace-index.json';
+const HARD_IGNORES = ['node_modules/', '.git/', 'dist/', 'build/', 'coverage/', '.cache/', 'target/', 'out/', '.folzeur/'];
 
 /** Incremental local BM25 index. Mutations replace one file atomically and never rebuild the workspace on save. */
 export class WorkspaceCodeIndex extends Disposable {
@@ -42,6 +44,8 @@ export class WorkspaceCodeIndex extends Disposable {
 	private activeController: AbortController | undefined;
 	private readyPromise: Promise<void>;
 	private ignoredPatterns: string[] = [];
+	private readonly hardIgnoreMatcher = new IgnoreFile(HARD_IGNORES.join('\n'), '');
+	private repositoryIgnoreMatcher = new IgnoreFile('', '');
 	private totalLength = 0;
 	private errors = 0;
 	private chunksCreated = 0;
@@ -145,10 +149,9 @@ export class WorkspaceCodeIndex extends Disposable {
 
 	private enqueue(resource: URI, deleted = false): void {
 		if (this.cancelled || this.workCancelled) {return;}
-		if (!resource.path.startsWith(this.workspace.path) || isIgnored(resource.path, this.workspace.path, this.ignoredPatterns)) {
+		if (!resource.path.startsWith(this.workspace.path) || this.isIgnored(resource.path, this.workspace.path)) {
 			return;
 		}
-		rustEngine.markWorkspaceDirty(this.workspace.fsPath);
 		const key = resource.toString();
 		this.queue.add(deleted ? `!${key}` : key);
 		this.activeController?.abort();
@@ -165,12 +168,19 @@ export class WorkspaceCodeIndex extends Disposable {
 			while (this.queue.size && !this.workCancelled) {
 				const batch = [...this.queue].splice(0, 16);
 				batch.forEach(key => this.queue.delete(key));
+				const upsertPaths = batch.filter(key => !key.startsWith('!')).map(key => URI.parse(key).fsPath);
+				const deletedPaths = batch.filter(key => key.startsWith('!')).map(key => URI.parse(key.slice(1)).fsPath);
 				for (let offset = 0; offset < batch.length; offset += 8) {
 					if (this.activeController.signal.aborted || this.workCancelled) {return;}
 					await Promise.all(batch.slice(offset, offset + 8).map(key => {
 						const deleted = key.startsWith('!');
 						return this.updateFile(URI.parse(deleted ? key.slice(1) : key), deleted, this.activeController!.signal);
 					}));
+				}
+				try {
+					await rustEngine.applyWorkspaceFileEvents(this.workspace.fsPath, upsertPaths, deletedPaths);
+				} catch {
+					this.errors++;
 				}
 			}
 			await this.persist();
@@ -191,7 +201,7 @@ export class WorkspaceCodeIndex extends Disposable {
 			const raw = (await this.fileService.readFile(resource)).value;
 			if (signal.aborted || this.workCancelled) {return;}
 			const content = raw.toString();
-			if (content.length > MAX_FILE_BYTES || isBinary(content) || isIgnored(file, this.workspace.path, this.ignoredPatterns)) { this.removeFile(file); return; }
+			if (content.length > MAX_FILE_BYTES || isBinary(content) || this.isIgnored(file, this.workspace.path)) { this.removeFile(file); return; }
 			const hash = hashText(content);
 			if (this.manifest.get(file)?.hash === hash || this.deferredDocuments.get(file)?.hash === hash) {return;}
 			const next = makeChunks(file, content);
@@ -262,16 +272,18 @@ export class WorkspaceCodeIndex extends Disposable {
 			} catch { /* optional ignore file */ }
 		}
 		this.ignoredPatterns = [...new Set(this.ignoredPatterns)];
+		this.repositoryIgnoreMatcher = new IgnoreFile(this.ignoredPatterns.join('\n'), '');
+		rustEngine.setWorkspaceExclusions(this.workspace.fsPath, this.ignoredPatterns);
 		try {
 			const resource = URI.joinPath(this.workspace, INDEX_FILE);
 			const stat = await this.fileService.resolve(resource, { resolveMetadata: true });
 			if (Number(stat.size ?? 0) > MAX_PERSISTED_INDEX_BYTES) {throw new Error('Persisted fallback index exceeds its resource budget.');}
 			const data = JSON.parse((await this.fileService.readFile(resource)).value.toString()) as PersistedIndex;
 			if (data.version !== 1 && data.version !== 2) {return;}
-			for (const raw of data.chunks) { if (this.totalLength >= this.hotCacheCharacterBudget || isIgnored(raw.filePath, this.workspace.path, this.ignoredPatterns)) {continue;} const chunk = { ...raw, terms: new Map(Object.entries(raw.terms)) }; this.chunks.set(chunk.id, chunk); this.totalLength += chunk.length; for (const term of chunk.terms.keys()) { const ids = this.inverted.get(term) ?? new Set<string>(); ids.add(chunk.id); this.inverted.set(term, ids); this.documentFrequency.set(term, ids.size); } }
-			for (const [file, entry] of Object.entries(data.manifest)) { if (isIgnored(file, this.workspace.path, this.ignoredPatterns)) {continue;} this.catalog.add(file); const existingIds = entry.chunkIds.filter(id => this.chunks.has(id)); if (!existingIds.length) { this.deferredToNativeIndex.add(file); continue; } this.manifest.set(file, { ...entry, chunkIds: existingIds }); this.fileChunks.set(file, new Set(existingIds)); }
+			for (const raw of data.chunks) { if (this.totalLength >= this.hotCacheCharacterBudget || this.isIgnored(raw.filePath, this.workspace.path)) {continue;} const chunk = { ...raw, terms: new Map(Object.entries(raw.terms)) }; this.chunks.set(chunk.id, chunk); this.totalLength += chunk.length; for (const term of chunk.terms.keys()) { const ids = this.inverted.get(term) ?? new Set<string>(); ids.add(chunk.id); this.inverted.set(term, ids); this.documentFrequency.set(term, ids.size); } }
+			for (const [file, entry] of Object.entries(data.manifest)) { if (this.isIgnored(file, this.workspace.path)) {continue;} this.catalog.add(file); const existingIds = entry.chunkIds.filter(id => this.chunks.has(id)); if (!existingIds.length) { this.deferredToNativeIndex.add(file); continue; } this.manifest.set(file, { ...entry, chunkIds: existingIds }); this.fileChunks.set(file, new Set(existingIds)); }
 			for (const [file, document] of Object.entries(data.deferred ?? {})) {
-				if (isIgnored(file, this.workspace.path, this.ignoredPatterns) || !document || typeof document.hash !== 'string' || !Array.isArray(document.terms)) {continue;}
+				if (this.isIgnored(file, this.workspace.path) || !document || typeof document.hash !== 'string' || !Array.isArray(document.terms)) {continue;}
 				this.catalog.add(file);
 				this.deferredToNativeIndex.add(file);
 				this.addDeferredDocument(file, { hash: document.hash, terms: document.terms.filter(term => typeof term === 'string') });
@@ -327,13 +339,29 @@ export class WorkspaceCodeIndex extends Disposable {
 		try {
 			const stat = await this.fileService.resolve(resource);
 			if (stat.isDirectory) {
-				const children = (stat.children ?? []).filter(child => !isIgnored(child.name, resource.path, this.ignoredPatterns));
+				const children = (stat.children ?? []).filter(child => !this.isIgnored(child.name, resource.path, child.isDirectory));
 				for (let offset = 0; offset < children.length; offset += 16) {
 					if (this.cancelled || this.workCancelled) {return;}
 					await Promise.all(children.slice(offset, offset + 16).map(child => this.collect(child.resource, depth + 1, accept)));
 				}
 			} else if (isIndexable(resource.path)) {accept(resource);}
 		} catch { this.errors++; }
+	}
+
+	private isIgnored(nameOrPath: string, basePath: string, isDirectory = false): boolean {
+		const workspacePath = this.workspace.path.replace(/\\/g, '/').replace(/\/$/, '');
+		const normalizedBase = basePath.replace(/\\/g, '/').replace(/\/$/, '');
+		const candidate = nameOrPath.replace(/\\/g, '/');
+		let relative = candidate.startsWith(`${workspacePath}/`)
+			? candidate.slice(workspacePath.length + 1)
+			: normalizedBase === workspacePath || normalizedBase.startsWith(`${workspacePath}/`)
+				? `${normalizedBase.slice(workspacePath.length).replace(/^\//, '')}/${candidate}`.replace(/^\//, '')
+				: candidate.replace(/^\//, '');
+		relative = relative.replace(/^\.\//, '');
+		if (isSensitivePath(relative) || !relative) {return Boolean(relative);}
+		const ignorePath = `/${relative.replace(/\/$/, '')}`;
+		return this.hardIgnoreMatcher.isArbitraryPathIgnored(ignorePath, isDirectory)
+			|| this.repositoryIgnoreMatcher.isArbitraryPathIgnored(ignorePath, isDirectory);
 	}
 }
 
@@ -352,19 +380,6 @@ function termCounts(value: string): Map<string, number> { const result = new Map
 function relativePath(resource: URI, workspace: URI): string { return resource.path.startsWith(workspace.path) ? resource.path.slice(workspace.path.length + 1) : resource.path; }
 function isIndexable(path: string): boolean { return /\.(ts|tsx|js|jsx|mjs|cjs|py|rs|go|java|cs|cpp|h|hpp|md|json|yaml|yml|css|html|sql)$/i.test(path); }
 function isBinary(content: string): boolean { return content.includes('\0'); }
-function isIgnored(nameOrPath: string, basePath: string, patterns: readonly string[]): boolean {
-	if (isSensitivePath(nameOrPath)) {return true;}
-	const name = nameOrPath.split(/[\\/]/).pop() ?? nameOrPath;
-	const relative = nameOrPath.startsWith(basePath) ? nameOrPath.slice(basePath.length + 1) : nameOrPath;
-	const segments = relative.split(/[\\/]/);
-	if (segments.some(segment => ['node_modules', '.git', 'dist', 'build', 'coverage', '.cache', 'target', 'out', '.folzeur'].includes(segment))) {
-		return true;
-	}
-	return patterns.some(pattern => {
-		const normalized = pattern.replace(/^\//, '').replace(/\/$/, '');
-		return relative === normalized || relative.startsWith(`${normalized}/`) || name === normalized;
-	});
-}
 function hashText(value: string): string { let hash = 2166136261; for (let i = 0; i < value.length; i++) { hash ^= value.charCodeAt(i); hash = Math.imul(hash, 16777619); } return (hash >>> 0).toString(16); }
 function deduplicate(chunks: readonly CodeChunk[]): CodeChunk[] { const seen = new Set<string>(); return chunks.filter(chunk => !seen.has(chunk.id) && seen.add(chunk.id)); }
 function scoreColdChunks(query: string, chunks: readonly CodeChunk[], limit: number): CodeSearchResult[] {

@@ -7,6 +7,8 @@ import { CancellationToken } from '../../../../../../base/common/cancellation.js
 import { Disposable } from '../../../../../../base/common/lifecycle.js';
 import { URI } from '../../../../../../base/common/uri.js';
 import { IOpenerService } from '../../../../../../platform/opener/common/opener.js';
+// The static preview server is hosted by the desktop shared process; this registry is its renderer IPC client.
+// eslint-disable-next-line local/code-layering, local/code-import-patterns
 import { ISharedProcessService } from '../../../../../../platform/ipc/electron-browser/services.js';
 import { LOCAL_APP_SERVER_CHANNEL, LocalAppServerChannelClient } from '../../../../../../platform/localApp/common/localAppServer.js';
 
@@ -44,6 +46,22 @@ export class LocalAppServerRegistry extends Disposable {
 			throw new Error(`The browser could not open ${url}`);
 		}
 		return url;
+	}
+
+	/** Resolves only loopback URLs owned by a server launched through this registry. */
+	public resolveOwnedUrl(candidate: string): URL | undefined {
+		let requested: URL;
+		try {requested = new URL(candidate);} catch {return undefined;}
+		if (requested.protocol !== 'http:' || !['127.0.0.1', 'localhost', '[::1]'].includes(requested.hostname)) {return undefined;}
+		for (const registered of this.servers.values()) {
+			let owned: URL;
+			try {owned = new URL(registered);} catch {continue;}
+			if (requested.origin !== owned.origin) {continue;}
+			let tokenMatches = true;
+			for (const [name, value] of owned.searchParams) {if (requested.searchParams.get(name) !== value) {tokenMatches = false; break;}}
+			if (tokenMatches) {return requested;}
+		}
+		return undefined;
 	}
 
 	public override dispose(): void {

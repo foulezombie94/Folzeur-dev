@@ -9,6 +9,8 @@ import { IFileService } from '../../../../../../platform/files/common/files.js';
 import { CustomModeManager } from './CustomModeManager.js';
 import { ITerminalProfileResolverService } from '../../../../../contrib/terminal/common/terminal.js';
 import { resolveAgentShellEnvironment } from '../terminal/TerminalShellEnvironment.js';
+import { IRemoteAgentService } from '../../../../../services/remote/common/remoteAgentService.js';
+import { IWorkbenchEnvironmentService } from '../../../../../services/environment/common/environmentService.js';
 
 /** Builds trusted runtime instructions and labels repository-owned configuration as untrusted data. */
 export class AgentSystemPromptBuilder {
@@ -17,12 +19,14 @@ export class AgentSystemPromptBuilder {
 		private readonly fileService: IFileService,
 		private readonly customModeManager: CustomModeManager,
 		private readonly terminalProfileResolverService: ITerminalProfileResolverService,
+		private readonly remoteAgentService: IRemoteAgentService,
+		private readonly environmentService: IWorkbenchEnvironmentService,
 	) { }
 
 	public async build(cwd: string): Promise<string> {
-		const isWindows = typeof process !== 'undefined' ? process.platform === 'win32' : navigator.userAgent.includes('Windows');
-		const shell = await resolveAgentShellEnvironment(this.terminalProfileResolverService);
-		let prompt = `====
+		const shell = await resolveAgentShellEnvironment(this.terminalProfileResolverService, this.remoteAgentService, this.environmentService);
+		const isWindows = shell.dialect === 'powershell' || shell.dialect === 'cmd';
+		const prompt = `====
 OBJECTIVE
 You are a highly capable native VS Code AI agent. Accomplish concrete tasks methodically. Conversational messages require a direct answer and zero tool calls. Do not claim completion without runtime evidence.
 
@@ -50,28 +54,25 @@ TOOL GUIDELINES
 - After the final mutation, run risk-appropriate verification and git_diff before attempt_completion.
 - Narrow truncated searches. Use search_codebase for concepts, search_files for names, grep for exact text, and read_file for implementation ranges.
 `;
-		if (this.configurationService.getValue<boolean>('chat.api.allowThirdPartyConfigs') !== false) {
-			prompt += await this.workspaceConfiguration(cwd);
-			try {
-				const mode = await this.customModeManager.getMode(URI.file(cwd), 'architect');
-				if (mode) {prompt += `\n[UNTRUSTED USER-ENABLED CUSTOM MODE: ${mode.name}]\n${mode.roleDefinition}\n${mode.customInstructions || ''}\n[END UNTRUSTED CUSTOM MODE]\n`;}
-			} catch { /* optional repository configuration */ }
-		}
 		return prompt;
 	}
 
+	public async buildRepositoryContext(cwd: string): Promise<string> {
+		if (this.configurationService.getValue<boolean>('chat.api.allowThirdPartyConfigs') === false) {return '';}
+		let content = await this.workspaceConfiguration(cwd);
+		try {
+			const mode = await this.customModeManager.getMode(URI.file(cwd), 'architect');
+			if (mode) {content += `\n[UNTRUSTED USER-ENABLED CUSTOM MODE: ${mode.name}]\n${mode.roleDefinition}\n${mode.customInstructions || ''}\n[END UNTRUSTED CUSTOM MODE]\n`;}
+		} catch { /* optional repository configuration */ }
+		return content;
+	}
+
 	private async workspaceConfiguration(cwd: string): Promise<string> {
-		let currentPath = cwd;
 		let content = '';
-		for (let depth = 0; depth < 5; depth++) {
-			try {
-				const rules = await this.fileService.readFile(URI.joinPath(URI.file(currentPath), '.agents', 'rules.md'));
-				content = `${rules.value.toString()}\n\n${content}`;
-			} catch { /* optional repository configuration */ }
-			const parent = URI.joinPath(URI.file(currentPath), '..').fsPath;
-			if (parent === currentPath) {break;}
-			currentPath = parent;
-		}
+		try {
+			const rules = await this.fileService.readFile(URI.joinPath(URI.file(cwd), '.agents', 'rules.md'));
+			content = rules.value.toString();
+		} catch { /* optional repository configuration */ }
 		return content ? `\n[UNTRUSTED USER-ENABLED WORKSPACE CONFIGURATION]\n${content}\n[END UNTRUSTED WORKSPACE CONFIGURATION]\n` : '';
 	}
 }

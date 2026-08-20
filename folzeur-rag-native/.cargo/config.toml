@@ -1,4 +1,0 @@
-[env]
-# protoc est bundlé dans le dossier protoc/ du projet.
-# Cette variable est lue par prost-build (utilisé par lance-encoding, lance-file, lance-table).
-PROTOC = { value = "protoc/bin/protoc.exe", relative = true }

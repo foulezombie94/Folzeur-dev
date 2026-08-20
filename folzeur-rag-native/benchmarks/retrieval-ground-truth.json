@@ -1,0 +1,32 @@
+[
+  {
+    "language": "typescript",
+    "query": "refresh authentication token",
+    "expected": "typescript/auth/refresh.ts",
+    "source": "export async function refreshAuthenticationToken(refreshToken: string) { return tokenClient.exchangeRefreshToken(refreshToken); }"
+  },
+  {
+    "language": "javascript",
+    "query": "debounce filesystem events",
+    "expected": "javascript/watch/debounce.js",
+    "source": "export function debounceFilesystemEvents(events, delay) { return coalesceAfterDelay(events, delay); }"
+  },
+  {
+    "language": "rust",
+    "query": "publish committed generation",
+    "expected": "rust/storage.rs",
+    "source": "pub fn publish_committed_generation(pointer: &mut Pointer, generation: Generation) { pointer.atomic_publish(generation.id()); }"
+  },
+  {
+    "language": "python",
+    "query": "retry model download",
+    "expected": "python/model/manager.py",
+    "source": "def retry_model_download(manager, attempts):\n    return manager.download_with_retry(attempts=attempts)\n"
+  },
+  {
+    "language": "go",
+    "query": "validate redirect target",
+    "expected": "go/network/policy.go",
+    "source": "package network\nfunc ValidateRedirectTarget(target string) error { return validateResolvedAddress(target) }\n"
+  }
+]

@@ -5,6 +5,8 @@
 
 import { OperatingSystem, OS } from '../../../../../../base/common/platform.js';
 import { ITerminalProfileResolverService } from '../../../../../contrib/terminal/common/terminal.js';
+import { IRemoteAgentService } from '../../../../../services/remote/common/remoteAgentService.js';
+import { IWorkbenchEnvironmentService } from '../../../../../services/environment/common/environmentService.js';
 
 export type AgentShellDialect = 'powershell' | 'cmd' | 'posix' | 'fish';
 
@@ -15,16 +17,19 @@ export interface AgentShellEnvironment {
 	readonly displayDialect: string;
 }
 
-export async function resolveAgentShellEnvironment(terminalProfileResolverService: ITerminalProfileResolverService): Promise<AgentShellEnvironment> {
+
+export async function resolveAgentShellEnvironment(terminalProfileResolverService: ITerminalProfileResolverService, remoteAgentService?: IRemoteAgentService, environmentService?: IWorkbenchEnvironmentService): Promise<AgentShellEnvironment> {
+	const remoteEnvironment = environmentService?.remoteAuthority ? await remoteAgentService?.getEnvironment() : undefined;
+	const os = remoteEnvironment?.os ?? OS;
 	try {
-		const profile = await terminalProfileResolverService.getDefaultProfile({ remoteAuthority: undefined, os: OS, allowAutomationShell: false });
+		const profile = await terminalProfileResolverService.getDefaultProfile({ remoteAuthority: environmentService?.remoteAuthority, os, allowAutomationShell: false });
 		const identity = `${profile.profileName} ${profile.path}`.toLowerCase();
 		if (/pwsh|powershell/.test(identity)) {return { profileName: profile.profileName, executable: profile.path, dialect: 'powershell', displayDialect: 'PowerShell' };}
 		if (/cmd(?:\.exe)?|command prompt/.test(identity)) {return { profileName: profile.profileName, executable: profile.path, dialect: 'cmd', displayDialect: 'Windows Command Prompt (CMD)' };}
 		if (/fish/.test(identity)) {return { profileName: profile.profileName, executable: profile.path, dialect: 'fish', displayDialect: 'fish' };}
 		return { profileName: profile.profileName, executable: profile.path, dialect: 'posix', displayDialect: /zsh/.test(identity) ? 'zsh' : 'Bash/POSIX' };
 	} catch {
-		return OS === OperatingSystem.Windows
+		return os === OperatingSystem.Windows
 			? { profileName: 'Windows PowerShell fallback', executable: 'powershell.exe', dialect: 'powershell', displayDialect: 'PowerShell' }
 			: { profileName: 'system shell', executable: 'default', dialect: 'posix', displayDialect: 'POSIX shell' };
 	}

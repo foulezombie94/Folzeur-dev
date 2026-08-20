@@ -1,0 +1,10 @@
+[package]
+name = "paste"
+version = "1.0.15"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Compatibility facade from archived paste to maintained pastey"
+publish = false
+
+[dependencies]
+pastey = "0.2.3"

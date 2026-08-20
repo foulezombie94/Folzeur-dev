@@ -10,6 +10,7 @@ pub mod lexical;
 mod manifest;
 mod reranker;
 pub mod scanner;
+mod storage;
 
 use fs2::FileExt;
 use futures_util::stream::{FuturesUnordered, StreamExt};
@@ -36,7 +37,7 @@ struct IndexStats {
 }
 
 fn canonical_workspace(workspace_path: &str) -> Result<PathBuf> {
-    let path = std::fs::canonicalize(workspace_path)
+    let path = dunce::canonicalize(workspace_path)
         .map_err(|source| Error::new(Status::InvalidArg, format!("Invalid workspace: {source}")))?;
     if !path.is_dir() {
         return Err(Error::new(
@@ -154,7 +155,7 @@ impl SearchConfig {
 struct PreparedFile {
     path: String,
     chunks: Vec<chunker::CodeChunk>,
-    state: FileState,
+    state: Option<FileState>,
 }
 
 fn prepare_file(path: PathBuf) -> Result<Option<PreparedFile>> {
@@ -166,7 +167,13 @@ fn prepare_file(path: PathBuf) -> Result<Option<PreparedFile>> {
     })?;
     let content = match std::fs::read_to_string(&path) {
         Ok(content) => content,
-        Err(source) if source.kind() == std::io::ErrorKind::InvalidData => return Ok(None),
+        Err(source) if source.kind() == std::io::ErrorKind::InvalidData => {
+            return Ok(Some(PreparedFile {
+                path: path.to_string_lossy().into_owned(),
+                chunks: Vec::new(),
+                state: None,
+            }));
+        }
         Err(source) => {
             return Err(Error::new(
                 Status::GenericFailure,
@@ -174,13 +181,20 @@ fn prepare_file(path: PathBuf) -> Result<Option<PreparedFile>> {
             ));
         }
     };
-    let hash = xxhash_rust::xxh3::xxh3_64(content.as_bytes());
+    if scanner::contains_secret_content(&content) {
+        return Ok(Some(PreparedFile {
+            path: path.to_string_lossy().into_owned(),
+            chunks: Vec::new(),
+            state: None,
+        }));
+    }
     let path = path.to_string_lossy().into_owned();
+    let state = FileState::from_content(content.as_bytes(), &metadata);
     let chunks = chunker::parse_and_chunk(&path, &content)?;
     Ok(Some(PreparedFile {
         path,
         chunks,
-        state: FileState::from_metadata(hash, &metadata),
+        state: Some(state),
     }))
 }
 
@@ -227,7 +241,7 @@ async fn prepare_files(paths: Vec<PathBuf>) -> Result<Vec<PreparedFile>> {
 }
 
 async fn commit_prepared_files(
-    workspace: &Path,
+    generation_root: &Path,
     files: Vec<PreparedFile>,
     cancellation: &AtomicBool,
     lexical_writer: &mut Option<lexical::LexicalWriter>,
@@ -236,10 +250,9 @@ async fn commit_prepared_files(
 ) -> Result<()> {
     for prepared in files {
         if cancellation.load(Ordering::Acquire) {
-            manifest.save(workspace)?;
             return Err(Error::new(Status::Cancelled, "Indexing cancelled"));
         }
-        let workspace_string = workspace.to_string_lossy();
+        let workspace_string = generation_root.to_string_lossy();
         let cached =
             database::existing_embeddings(workspace_string.as_ref(), &prepared.path).await?;
         let embedding_path = prepared.path.clone();
@@ -262,13 +275,16 @@ async fn commit_prepared_files(
         if let Some(writer) = lexical_writer.as_mut() {
             writer.replace_file(&prepared.path, &prepared.chunks)?;
         }
-        manifest.files.insert(prepared.path, prepared.state);
-        stats.updated_files += 1;
+        if let Some(state) = prepared.state {
+            manifest.files.insert(prepared.path, state);
+            stats.updated_files += 1;
+        } else if manifest.files.remove(&prepared.path).is_some() {
+            stats.deleted_files += 1;
+        }
         if stats.updated_files.is_multiple_of(16) {
             if let Some(writer) = lexical_writer.as_mut() {
                 writer.commit()?;
             }
-            manifest.save(workspace)?;
         }
     }
     Ok(())
@@ -293,8 +309,37 @@ pub async fn index_project(
     .map_err(|source| Error::new(Status::GenericFailure, source.to_string()))??;
     let started = Instant::now();
     let excludes = exclude_patterns.unwrap_or_default();
-    let mut manifest = Manifest::load(&workspace);
-    let compatible = manifest.is_compatible();
+    let (mut manifest, mut rebuild) = match storage::active_root(&workspace) {
+        Ok(Some(root)) => match (storage::active_state(&workspace), Manifest::load(&root)) {
+            (Ok(Some(state)), Ok(manifest)) => {
+                let compatible = state.rag_schema_version == database::RAG_SCHEMA_VERSION
+                    && state.lexical_schema_version == lexical::LEXICAL_SCHEMA_VERSION
+                    && state.manifest_schema_version == manifest::MANIFEST_SCHEMA_VERSION
+                    && state.embedding_signature == embedder::EMBEDDING_SIGNATURE
+                    && state.generation_id == manifest.generation_id
+                    && manifest.is_compatible();
+                (manifest, !compatible)
+            }
+            (state, loaded) => {
+                eprintln!("folzeur RAG recovery: active generation is invalid (state={:?}, manifest={:?}); rebuilding without publishing partial state", state.err(), loaded.err());
+                (Manifest::default(), true)
+            }
+        },
+        Ok(None) => (Manifest::default(), true),
+        Err(source) => {
+            eprintln!("folzeur RAG recovery: generation pointer validation failed: {source}; rebuilding into a new generation");
+            (Manifest::default(), true)
+        }
+    };
+    if !manifest.is_compatible() {
+        rebuild = true;
+    }
+    if rebuild {
+        manifest = Manifest::default();
+    }
+    let transaction = storage::GenerationTransaction::begin(&workspace, rebuild)?;
+    let generation_root = transaction.root().to_owned();
+    let compatible = !rebuild;
     let mut stale_paths: HashSet<String> = manifest.files.keys().cloned().collect();
     let mut stats = IndexStats::default();
     let mut lexical_writer: Option<lexical::LexicalWriter> = None;
@@ -314,7 +359,6 @@ pub async fn index_project(
     let mut prepare_batch = Vec::with_capacity(4);
     while let Some(path) = receiver.recv().await {
         if cancellation.load(Ordering::Acquire) {
-            manifest.save(&workspace)?;
             return Err(Error::new(Status::Cancelled, "Indexing cancelled"));
         }
         stats.scanned_files += 1;
@@ -324,19 +368,22 @@ pub async fn index_project(
             Ok(metadata) => metadata,
             Err(_) => continue,
         };
-        if compatible
-            && manifest
-                .files
-                .get(&path_key)
-                .is_some_and(|state| state.metadata_matches(&metadata))
-        {
+        let unchanged = if compatible {
+            match manifest.files.get(&path_key) {
+                Some(state) if state.metadata_matches(&metadata) => state.content_matches(&path)?,
+                _ => false,
+            }
+        } else {
+            false
+        };
+        if unchanged {
             continue;
         }
         prepare_batch.push(path);
         if prepare_batch.len() >= 4 {
             let prepared = prepare_files(std::mem::take(&mut prepare_batch)).await?;
             commit_prepared_files(
-                &workspace,
+                &generation_root,
                 prepared,
                 cancellation.as_ref(),
                 &mut lexical_writer,
@@ -352,7 +399,7 @@ pub async fn index_project(
     if !prepare_batch.is_empty() {
         let prepared = prepare_files(prepare_batch).await?;
         commit_prepared_files(
-            &workspace,
+            &generation_root,
             prepared,
             cancellation.as_ref(),
             &mut lexical_writer,
@@ -364,11 +411,11 @@ pub async fn index_project(
 
     for stale_path in stale_paths {
         if cancellation.load(Ordering::Acquire) {
-            manifest.save(&workspace)?;
             return Err(Error::new(Status::Cancelled, "Indexing cancelled"));
         }
         if let Err(source) =
-            database::delete_file_chunks(workspace.to_string_lossy().as_ref(), &stale_path).await
+            database::delete_file_chunks(generation_root.to_string_lossy().as_ref(), &stale_path)
+                .await
         {
             stats.last_error = Some(source.to_string());
             record_stats(&workspace, stats);
@@ -376,7 +423,7 @@ pub async fn index_project(
         }
         if lexical_writer.is_none() {
             lexical_writer = Some(lexical::LexicalWriter::new(
-                workspace.to_string_lossy().as_ref(),
+                generation_root.to_string_lossy().as_ref(),
             )?);
         }
         if let Some(writer) = lexical_writer.as_mut() {
@@ -386,11 +433,30 @@ pub async fn index_project(
         stats.deleted_files += 1;
     }
 
+    database::ensure_indices(generation_root.to_string_lossy().as_ref()).await?;
+    transaction.record_phase(storage::CommitPhase::VectorCommitted)?;
     if let Some(writer) = lexical_writer.as_mut() {
         writer.commit()?;
+    } else {
+        lexical::LexicalWriter::new(generation_root.to_string_lossy().as_ref())?.commit()?;
     }
-    database::ensure_indices(workspace.to_string_lossy().as_ref()).await?;
-    manifest.save(&workspace)?;
+    transaction.record_phase(storage::CommitPhase::LexicalCommitted)?;
+    manifest.save(&generation_root, transaction.generation_id())?;
+    transaction.record_phase(storage::CommitPhase::ManifestCommitted)?;
+    let vector_rows = database::validate(generation_root.to_string_lossy().as_ref()).await?;
+    let lexical_rows = lexical::validate(generation_root.to_string_lossy().as_ref())?;
+    if vector_rows != lexical_rows {
+        return Err(Error::new(Status::GenericFailure, format!("Staged RAG generation is inconsistent: LanceDB has {vector_rows} chunks and Tantivy has {lexical_rows}")));
+    }
+    let state = storage::GenerationState {
+        generation_id: transaction.generation_id(),
+        storage_schema_version: storage::STORAGE_SCHEMA_VERSION,
+        rag_schema_version: database::RAG_SCHEMA_VERSION,
+        lexical_schema_version: lexical::LEXICAL_SCHEMA_VERSION,
+        manifest_schema_version: manifest::MANIFEST_SCHEMA_VERSION,
+        embedding_signature: embedder::EMBEDDING_SIGNATURE.to_owned(),
+    };
+    transaction.publish(&state)?;
     stats.duration_ms = started.elapsed().as_millis();
     let changed = stats.updated_files + stats.deleted_files;
     eprintln!(
@@ -399,6 +465,239 @@ pub async fn index_project(
     );
     record_stats(&workspace, stats);
     Ok(changed as u32)
+}
+
+async fn apply_file_events_internal(
+    workspace_path: String,
+    upsert_paths: Vec<String>,
+    deleted_paths: Vec<String>,
+    exclude_patterns: Vec<String>,
+) -> Result<u32> {
+    let workspace = canonical_workspace(&workspace_path)?;
+    if inspect_active_index(&workspace).await.is_err() {
+        return index_project(workspace_path, Some(exclude_patterns)).await;
+    }
+    let lock = workspace_lock(&workspace)?;
+    let _guard = lock.lock_owned().await;
+    let cancellation = cancellation_flag(&workspace)?;
+    cancellation.store(false, Ordering::Release);
+    let lock_workspace = workspace.clone();
+    let lock_cancellation = cancellation.clone();
+    let _process_guard = tokio::task::spawn_blocking(move || {
+        acquire_process_lock(&lock_workspace, &lock_cancellation)
+    })
+    .await
+    .map_err(|source| Error::new(Status::GenericFailure, source.to_string()))??;
+
+    let active_root = storage::active_root(&workspace)?.ok_or_else(|| {
+        Error::new(
+            Status::GenericFailure,
+            "No active RAG generation for delta update",
+        )
+    })?;
+    let mut manifest = Manifest::load(&active_root)?;
+    if !manifest.is_compatible() {
+        return Err(Error::new(
+            Status::GenericFailure,
+            "Active manifest is incompatible; a full rebuild is required",
+        ));
+    }
+    let transaction = storage::GenerationTransaction::begin(&workspace, false)?;
+    let generation_root = transaction.root().to_owned();
+    let mut stats = IndexStats::default();
+    let mut lexical_writer: Option<lexical::LexicalWriter> = None;
+    let mut prepared_paths = Vec::new();
+    let excludes = scanner::build_excludes(&exclude_patterns)?;
+    for raw_path in upsert_paths {
+        let path = resolve_event_path(&workspace, &raw_path, true)?;
+        if scanner::is_explicit_file_allowed(&workspace, &path, &excludes)? {
+            prepared_paths.push(path);
+        } else {
+            delete_from_generation(
+                &generation_root,
+                &path.to_string_lossy(),
+                &mut lexical_writer,
+                &mut manifest,
+                &mut stats,
+            )
+            .await?;
+        }
+    }
+    for batch in prepared_paths.chunks(16) {
+        if cancellation.load(Ordering::Acquire) {
+            return Err(Error::new(Status::Cancelled, "Indexing cancelled"));
+        }
+        let prepared = prepare_files(batch.to_vec()).await?;
+        commit_prepared_files(
+            &generation_root,
+            prepared,
+            cancellation.as_ref(),
+            &mut lexical_writer,
+            &mut manifest,
+            &mut stats,
+        )
+        .await?;
+    }
+    for raw_path in deleted_paths {
+        let path = resolve_event_path(&workspace, &raw_path, false)?;
+        delete_from_generation(
+            &generation_root,
+            &path.to_string_lossy(),
+            &mut lexical_writer,
+            &mut manifest,
+            &mut stats,
+        )
+        .await?;
+    }
+    publish_generation(
+        transaction,
+        &generation_root,
+        &mut manifest,
+        lexical_writer.as_mut(),
+    )
+    .await?;
+    Ok((stats.updated_files + stats.deleted_files) as u32)
+}
+
+fn resolve_event_path(workspace: &Path, raw_path: &str, must_exist: bool) -> Result<PathBuf> {
+    let raw = Path::new(raw_path);
+    if raw
+        .components()
+        .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return Err(Error::new(
+            Status::InvalidArg,
+            "RAG file event contains parent traversal",
+        ));
+    }
+    let candidate = if raw.is_absolute() {
+        raw.to_owned()
+    } else {
+        workspace.join(raw)
+    };
+    let resolved = if must_exist {
+        dunce::canonicalize(&candidate).map_err(|source| {
+            Error::new(
+                Status::InvalidArg,
+                format!("Invalid RAG event path {}: {source}", candidate.display()),
+            )
+        })?
+    } else {
+        candidate
+    };
+    if !scanner::is_within(workspace, &resolved) {
+        return Err(Error::new(
+            Status::InvalidArg,
+            format!("RAG file event escaped workspace: {}", resolved.display()),
+        ));
+    }
+    Ok(resolved)
+}
+
+async fn delete_from_generation(
+    generation_root: &Path,
+    file_path: &str,
+    lexical_writer: &mut Option<lexical::LexicalWriter>,
+    manifest: &mut Manifest,
+    stats: &mut IndexStats,
+) -> Result<()> {
+    database::delete_file_chunks(generation_root.to_string_lossy().as_ref(), file_path).await?;
+    if lexical_writer.is_none() {
+        *lexical_writer = Some(lexical::LexicalWriter::new(
+            generation_root.to_string_lossy().as_ref(),
+        )?);
+    }
+    if let Some(writer) = lexical_writer.as_mut() {
+        writer.delete_file(file_path);
+    }
+    if manifest.files.remove(file_path).is_some() {
+        stats.deleted_files += 1;
+    }
+    Ok(())
+}
+
+async fn publish_generation(
+    transaction: storage::GenerationTransaction,
+    generation_root: &Path,
+    manifest: &mut Manifest,
+    lexical_writer: Option<&mut lexical::LexicalWriter>,
+) -> Result<()> {
+    database::ensure_indices(generation_root.to_string_lossy().as_ref()).await?;
+    transaction.record_phase(storage::CommitPhase::VectorCommitted)?;
+    if let Some(writer) = lexical_writer {
+        writer.commit()?;
+    } else {
+        lexical::LexicalWriter::new(generation_root.to_string_lossy().as_ref())?.commit()?;
+    }
+    transaction.record_phase(storage::CommitPhase::LexicalCommitted)?;
+    manifest.save(generation_root, transaction.generation_id())?;
+    transaction.record_phase(storage::CommitPhase::ManifestCommitted)?;
+    let vector_rows = database::validate(generation_root.to_string_lossy().as_ref()).await?;
+    let lexical_rows = lexical::validate(generation_root.to_string_lossy().as_ref())?;
+    if vector_rows != lexical_rows {
+        return Err(Error::new(Status::GenericFailure, format!("Staged RAG generation is inconsistent: LanceDB has {vector_rows} chunks and Tantivy has {lexical_rows}")));
+    }
+    transaction.publish(&storage::GenerationState {
+        generation_id: manifest.generation_id,
+        storage_schema_version: storage::STORAGE_SCHEMA_VERSION,
+        rag_schema_version: database::RAG_SCHEMA_VERSION,
+        lexical_schema_version: lexical::LEXICAL_SCHEMA_VERSION,
+        manifest_schema_version: manifest::MANIFEST_SCHEMA_VERSION,
+        embedding_signature: embedder::EMBEDDING_SIGNATURE.to_owned(),
+    })?;
+    Ok(())
+}
+
+#[napi]
+pub async fn index_file(
+    workspace_path: String,
+    file_path: String,
+    exclude_patterns: Option<Vec<String>>,
+) -> Result<u32> {
+    apply_file_events_internal(
+        workspace_path,
+        vec![file_path],
+        Vec::new(),
+        exclude_patterns.unwrap_or_default(),
+    )
+    .await
+}
+
+#[napi]
+pub async fn delete_file(workspace_path: String, file_path: String) -> Result<u32> {
+    apply_file_events_internal(workspace_path, Vec::new(), vec![file_path], Vec::new()).await
+}
+
+#[napi]
+pub async fn rename_file(
+    workspace_path: String,
+    old_path: String,
+    new_path: String,
+    exclude_patterns: Option<Vec<String>>,
+) -> Result<u32> {
+    apply_file_events_internal(
+        workspace_path,
+        vec![new_path],
+        vec![old_path],
+        exclude_patterns.unwrap_or_default(),
+    )
+    .await
+}
+
+#[napi]
+pub async fn apply_file_events(
+    workspace_path: String,
+    upsert_paths: Vec<String>,
+    deleted_paths: Vec<String>,
+    exclude_patterns: Option<Vec<String>>,
+) -> Result<u32> {
+    apply_file_events_internal(
+        workspace_path,
+        upsert_paths,
+        deleted_paths,
+        exclude_patterns.unwrap_or_default(),
+    )
+    .await
 }
 
 #[napi]
@@ -430,7 +729,7 @@ pub fn get_index_stats(workspace_path: String) -> Result<String> {
 }
 
 async fn semantic_search(
-    workspace: String,
+    generation_root: String,
     query: String,
     top_k: u32,
     threshold: f32,
@@ -445,7 +744,130 @@ async fn semantic_search(
     if embedding.is_empty() {
         return Ok(Vec::new());
     }
-    database::search_chunks(&workspace, embedding, top_k, threshold).await
+    database::search_chunks(&generation_root, embedding, top_k, threshold).await
+}
+
+#[derive(serde::Serialize)]
+struct IndexHealth {
+    valid: bool,
+    generation_id: u64,
+    manifest_files: usize,
+    vector_chunks: usize,
+    lexical_chunks: usize,
+    error: Option<String>,
+}
+
+async fn inspect_active_index(workspace: &Path) -> Result<(PathBuf, IndexHealth)> {
+    let root = storage::active_root(workspace)?
+        .ok_or_else(|| Error::new(Status::GenericFailure, "No published RAG generation"))?;
+    let state = storage::active_state(workspace)?.ok_or_else(|| {
+        Error::new(
+            Status::GenericFailure,
+            "Published RAG generation has no state",
+        )
+    })?;
+    let manifest = Manifest::load(&root)?;
+    if state.generation_id != manifest.generation_id
+        || state.rag_schema_version != database::RAG_SCHEMA_VERSION
+        || state.lexical_schema_version != lexical::LEXICAL_SCHEMA_VERSION
+        || state.manifest_schema_version != manifest::MANIFEST_SCHEMA_VERSION
+        || state.embedding_signature != embedder::EMBEDDING_SIGNATURE
+        || !manifest.is_compatible()
+    {
+        return Err(Error::new(
+            Status::GenericFailure,
+            "Published RAG generation metadata is inconsistent",
+        ));
+    }
+    let vector_chunks = database::validate(root.to_string_lossy().as_ref()).await?;
+    let lexical_chunks = lexical::validate(root.to_string_lossy().as_ref())?;
+    if vector_chunks != lexical_chunks {
+        return Err(Error::new(Status::GenericFailure, format!("RAG generation {} is inconsistent: LanceDB={vector_chunks}, Tantivy={lexical_chunks}", state.generation_id)));
+    }
+    Ok((
+        root,
+        IndexHealth {
+            valid: true,
+            generation_id: state.generation_id,
+            manifest_files: manifest.files.len(),
+            vector_chunks,
+            lexical_chunks,
+            error: None,
+        },
+    ))
+}
+
+async fn ensure_healthy_index(workspace: &Path) -> Result<PathBuf> {
+    match inspect_active_index(workspace).await {
+        Ok((root, _)) => Ok(root),
+        Err(source) => {
+            eprintln!("folzeur RAG health check failed: {source}; starting controlled rebuild");
+            index_project(workspace.to_string_lossy().into_owned(), None).await?;
+            inspect_active_index(workspace).await.map(|(root, _)| root)
+        }
+    }
+}
+
+#[napi]
+pub async fn validate_index(workspace_path: String, auto_rebuild: Option<bool>) -> Result<String> {
+    let workspace = canonical_workspace(&workspace_path)?;
+    let inspected = if auto_rebuild.unwrap_or(true) {
+        match ensure_healthy_index(&workspace).await {
+            Ok(_) => inspect_active_index(&workspace)
+                .await
+                .map(|(_, health)| health),
+            Err(source) => Err(source),
+        }
+    } else {
+        inspect_active_index(&workspace)
+            .await
+            .map(|(_, health)| health)
+    };
+    let health = match inspected {
+        Ok(health) => health,
+        Err(source) => IndexHealth {
+            valid: false,
+            generation_id: 0,
+            manifest_files: 0,
+            vector_chunks: 0,
+            lexical_chunks: 0,
+            error: Some(source.to_string()),
+        },
+    };
+    serde_json::to_string(&health)
+        .map_err(|source| Error::new(Status::GenericFailure, source.to_string()))
+}
+
+#[napi]
+pub fn list_indexed_files(workspace_path: String) -> Result<String> {
+    let workspace = canonical_workspace(&workspace_path)?;
+    let root = storage::active_root(&workspace)?
+        .ok_or_else(|| Error::new(Status::GenericFailure, "No published RAG generation"))?;
+    let manifest = Manifest::load(&root)?;
+    let mut files = manifest.files.keys().cloned().collect::<Vec<_>>();
+    files.sort_unstable();
+    serde_json::to_string(
+        &serde_json::json!({ "generation_id": manifest.generation_id, "files": files }),
+    )
+    .map_err(|source| Error::new(Status::GenericFailure, source.to_string()))
+}
+
+#[napi]
+pub fn get_model_status() -> Result<String> {
+    serde_json::to_string(&embedder::status()?)
+        .map_err(|source| Error::new(Status::GenericFailure, source.to_string()))
+}
+
+#[napi]
+pub async fn install_model(allow_download: Option<bool>) -> Result<()> {
+    tokio::task::spawn_blocking(move || embedder::install(allow_download.unwrap_or(true)))
+        .await
+        .map_err(|source| Error::new(Status::GenericFailure, source.to_string()))?
+}
+
+#[napi]
+pub fn set_model_download_allowed(allowed: bool) {
+    embedder::set_download_allowed(allowed);
 }
 
 #[napi]
@@ -456,14 +878,16 @@ pub async fn search_code(
     config: Option<SearchConfig>,
 ) -> Result<String> {
     let workspace = canonical_workspace(&workspace_path)?;
+    let generation_root = ensure_healthy_index(&workspace).await?;
     let config = config.unwrap_or_default();
-    let results = semantic_search(
-        workspace.to_string_lossy().into_owned(),
+    let mut results = semantic_search(
+        generation_root.to_string_lossy().into_owned(),
         query,
         config.top_k().max(top_k),
         config.threshold(),
     )
     .await?;
+    redact_search_results(&mut results);
     serde_json::to_string(&results)
         .map_err(|source| Error::new(Status::GenericFailure, source.to_string()))
 }
@@ -503,7 +927,8 @@ pub async fn hybrid_search(
     config: Option<SearchConfig>,
 ) -> Result<String> {
     let workspace = canonical_workspace(&workspace_path)?;
-    let workspace_string = workspace.to_string_lossy().into_owned();
+    let generation_root = ensure_healthy_index(&workspace).await?;
+    let workspace_string = generation_root.to_string_lossy().into_owned();
     let config = config.unwrap_or_default();
     let top_k = config.top_k();
     let candidates = (top_k * 3).max(30);
@@ -565,6 +990,19 @@ pub async fn hybrid_search(
             .unwrap_or(std::cmp::Ordering::Equal)
     });
     output.truncate(top_k as usize);
+    redact_search_results(&mut output);
     serde_json::to_string(&output)
         .map_err(|source| Error::new(Status::GenericFailure, source.to_string()))
+}
+
+fn redact_search_results(results: &mut [serde_json::Value]) {
+    for result in results {
+        if let Some(content) = result.get("content").and_then(serde_json::Value::as_str) {
+            if scanner::contains_secret_content(content) {
+                result["content"] = serde_json::Value::String(
+                    "[REDACTED: potential credential material]".to_owned(),
+                );
+            }
+        }
+    }
 }

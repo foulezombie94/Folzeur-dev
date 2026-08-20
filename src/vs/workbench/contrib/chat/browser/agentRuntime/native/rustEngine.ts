@@ -34,9 +34,18 @@ interface NativeEngine {
 
 interface NativeRagEngine {
 	indexProject(cwd: string, excluded?: string[]): Promise<number>;
+	indexFile?(cwd: string, filePath: string, excluded?: string[]): Promise<number>;
+	deleteFile?(cwd: string, filePath: string): Promise<number>;
+	renameFile?(cwd: string, oldPath: string, newPath: string, excluded?: string[]): Promise<number>;
+	applyFileEvents?(cwd: string, upsertPaths: string[], deletedPaths: string[], excluded?: string[]): Promise<number>;
 	cancelIndexProject?(cwd: string): void;
 	hybridSearch(cwd: string, query: string, config?: { topK?: number; similarityThreshold?: number }): Promise<string>;
 	getIndexStats?(cwd: string): string;
+	validateIndex?(cwd: string, autoRebuild?: boolean): Promise<string>;
+	listIndexedFiles?(cwd: string): string;
+	setModelDownloadAllowed?(allowed: boolean): void;
+	getModelStatus?(): string;
+	installModel?(allowDownload?: boolean): Promise<void>;
 }
 
 interface NativeRagResult {
@@ -63,6 +72,7 @@ export class RustEngine {
 	private loadAttempted = false;
 	private readonly workspaceIndices = new Map<string, WorkspaceIndexState>();
 	private readonly ragPolicy = new Map<string, boolean>();
+	private readonly workspaceExclusions = new Map<string, readonly string[]>();
 
 	constructor() {
 		this.tryLoadNativeModule();
@@ -142,6 +152,28 @@ export class RustEngine {
 		}
 	}
 
+	public setWorkspaceExclusions(cwd: string, patterns: readonly string[]): void {
+		this.workspaceExclusions.set(cwd, [...new Set(patterns)]);
+	}
+
+	public async applyWorkspaceFileEvents(cwd: string, upsertPaths: readonly string[], deletedPaths: readonly string[]): Promise<void> {
+		if (!this.ragModule || this.ragPolicy.get(cwd) === false || (!upsertPaths.length && !deletedPaths.length)) {
+			return;
+		}
+		await this.ensureWorkspaceIndexed(cwd);
+		const excluded = [...(this.workspaceExclusions.get(cwd) ?? [])];
+		if (this.ragModule.applyFileEvents) {
+			await this.ragModule.applyFileEvents(cwd, [...upsertPaths], [...deletedPaths], excluded);
+			return;
+		}
+		for (const path of deletedPaths) {
+			await this.ragModule.deleteFile?.(cwd, path);
+		}
+		for (const path of upsertPaths) {
+			await this.ragModule.indexFile?.(cwd, path, excluded);
+		}
+	}
+
 	public cancelWorkspaceIndexing(cwd: string): void {
 		const state = this.workspaceIndices.get(cwd);
 		if (state) {state.dirty = true;}
@@ -151,6 +183,29 @@ export class RustEngine {
 	public setWorkspaceRagEnabled(cwd: string, enabled: boolean): void {
 		this.ragPolicy.set(cwd, enabled);
 		if (!enabled) {this.cancelWorkspaceIndexing(cwd);}
+	}
+
+	public setModelDownloadAllowed(allowed: boolean): void {this.ragModule?.setModelDownloadAllowed?.(allowed);}
+
+	public async awaitWorkspaceIndex(cwd: string): Promise<void> {await this.ensureWorkspaceIndexed(cwd);}
+
+	public async getIndexPrivacyReport(cwd: string): Promise<{ health: unknown; files: string[]; model: unknown }> {
+		if (!this.ragModule) {return { health: { status: 'native_module_unavailable' }, files: [], model: { state: 'unavailable' } };}
+		const health = this.ragModule.validateIndex ? JSON.parse(await this.ragModule.validateIndex(cwd, false)) : { status: 'validation_unavailable' };
+		const fileState = this.ragModule.listIndexedFiles ? JSON.parse(this.ragModule.listIndexedFiles(cwd)) as { files?: string[] } : {};
+		const model = this.ragModule.getModelStatus ? JSON.parse(this.ragModule.getModelStatus()) : { state: 'unknown' };
+		return { health, files: fileState.files ?? [], model };
+	}
+
+	public async rebuildWorkspaceIndex(cwd: string): Promise<void> {
+		if (!this.ragModule) {throw new Error('Native RAG module is unavailable.');}
+		this.markWorkspaceDirty(cwd);
+		await this.ensureWorkspaceIndexed(cwd);
+	}
+
+	public async installEmbeddingModel(): Promise<void> {
+		if (!this.ragModule?.installModel) {throw new Error('Native model manager is unavailable.');}
+		await this.ragModule.installModel(true);
 	}
 
 	public warmWorkspaceIndex(cwd: string): void {
@@ -177,7 +232,7 @@ export class RustEngine {
 		state.inFlight = (async () => {
 			do {
 				state.dirty = false;
-				await this.ragModule!.indexProject(cwd, []);
+				await this.ragModule!.indexProject(cwd, [...(this.workspaceExclusions.get(cwd) ?? [])]);
 			} while (state.dirty);
 		})().finally(() => state.inFlight = undefined);
 		await state.inFlight;

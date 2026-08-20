@@ -2,6 +2,9 @@ name: Folzeur RAG native artifacts
 
 on:
   workflow_dispatch:
+  push:
+    tags:
+      - 'folzeur-rag-v*'
   pull_request:
     paths:
       - 'folzeur-rag-native/**'
@@ -44,14 +47,102 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy,rustfmt
+      - uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - run: npm ci
       - run: cargo fmt --check
       - run: cargo clippy --release --all-targets -- -D warnings
       - run: cargo test --release
       - run: npm run build
+      - name: Smoke-test the Node-API module
+        run: node -e "const rag=require('./index.js'); const required=['indexProject','searchCode','getIndexStats','validateIndex','listIndexedFiles','getModelStatus']; for(const name of required){if(typeof rag[name]!=='function')throw new Error('missing '+name)}; JSON.parse(rag.getModelStatus());"
+      - name: Retrieval quality gate
+        run: npm run benchmark:retrieval
       - uses: actions/upload-artifact@v6
         with:
           name: folzeur-rag-native-${{ matrix.artifact }}
           path: folzeur-rag-native/*.node
           if-no-files-found: error
           retention-days: 14
+
+  dependency-policy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: folzeur-rag-native
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit,cargo-deny,cargo-cyclonedx
+      - run: cargo audit --deny warnings
+      - run: cargo deny check
+      - run: cargo cyclonedx --format json
+      - run: node benchmarks/generate-third-party-notices.mjs
+      - uses: actions/upload-artifact@v6
+        with:
+          name: folzeur-rag-sbom
+          path: |
+            folzeur-rag-native/*.cdx.json
+            folzeur-rag-native/THIRD_PARTY_NOTICES.md
+          if-no-files-found: error
+          retention-days: 90
+
+  performance-benchmark:
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/folzeur-rag-v')
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: folzeur-rag-native
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: folzeur-rag-native/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - run: npm ci
+      - run: npm run build
+      - name: Measure 1k, 10k and 100k-file retrieval performance and peak RSS
+        run: npm run benchmark:scale
+        env:
+          FOLZEUR_BENCH_REPORT: performance-report.json
+          FOLZEUR_MAX_PEAK_RSS_BYTES: '4294967296'
+          FOLZEUR_MAX_SEARCH_P95_MS: '2000'
+      - uses: actions/upload-artifact@v6
+        with:
+          name: folzeur-rag-performance
+          path: folzeur-rag-native/performance-report.json
+          if-no-files-found: error
+          retention-days: 90
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/folzeur-rag-v')
+    needs: [build-native, dependency-policy, performance-benchmark]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@v6
+        with:
+          pattern: folzeur-rag-*
+          path: release-artifacts
+          merge-multiple: true
+      - name: Generate release hashes
+        working-directory: release-artifacts
+        run: find . -type f -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+      - uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: 'release-artifacts/*'
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: release-artifacts/*

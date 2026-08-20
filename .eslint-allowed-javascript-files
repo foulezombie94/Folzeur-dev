@@ -85,6 +85,10 @@ extensions/vscode-api-tests/testWorkspace/worker.js
 extensions/vscode-colorize-tests/test/colorize-fixtures/test.js
 extensions/vscode-colorize-tests/test/colorize-fixtures/test6916.js
 extensions/yaml/build/update-grammar.js
+folzeur-rag-native/benchmarks/generate-third-party-notices.mjs
+folzeur-rag-native/benchmarks/retrieval-gate.mjs
+folzeur-rag-native/benchmarks/scale.mjs
+folzeur-rag-native/index.js
 gulpfile.mjs
 scripts/chat-simulation/common/perf-scenarios.js
 scripts/chat-simulation/common/utils.js

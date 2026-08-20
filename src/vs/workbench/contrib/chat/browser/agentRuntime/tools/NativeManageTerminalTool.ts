@@ -19,7 +19,9 @@ export class NativeManageTerminalTool implements INativeTool {
 			terminalId: {
 				type: 'integer', minimum: 1, maximum: 1_000_000,
 				description: 'The ID of the background terminal.'
-			}
+			},
+			offset: { type: 'integer', minimum: 0, maximum: 1_000_000_000, description: 'Character offset for paginated output.' },
+			limit: { type: 'integer', minimum: 1_000, maximum: 250_000, description: 'Maximum characters returned.' }
 		},
 		required: ['action', 'terminalId']
 	};
@@ -27,7 +29,7 @@ export class NativeManageTerminalTool implements INativeTool {
 	constructor(private readonly terminalManager: TerminalManager) {
 	}
 
-	public async execute(parameters: { action?: 'get_output' | 'interrupt'; terminalId?: number }, cwd?: string): Promise<string> {
+	public async execute(parameters: { action?: 'get_output' | 'interrupt'; terminalId?: number; offset?: number; limit?: number }, cwd?: string): Promise<string> {
 		const action = parameters.action;
 		const id = parameters.terminalId;
 
@@ -36,7 +38,7 @@ export class NativeManageTerminalTool implements INativeTool {
 		}
 
 		if (action === 'get_output') {
-			const res = await this.terminalManager.getUnretrievedOutput(id);
+			const res = await this.terminalManager.getUnretrievedOutput(id, parameters.offset, parameters.limit);
 			return JSON.stringify(res);
 		} else if (action === 'interrupt') {
 			return this.terminalManager.interrupt(id);

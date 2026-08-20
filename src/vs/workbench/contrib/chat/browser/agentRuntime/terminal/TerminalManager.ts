@@ -11,6 +11,9 @@ import { CancellationToken } from '../../../../../../base/common/cancellation.js
 import { Emitter, Event } from '../../../../../../base/common/event.js';
 import { redactSecrets } from '../utils/SecretProtection.js';
 import { GeneralShellType, ITerminalLaunchError, TerminalShellType, WindowsShellType } from '../../../../../../platform/terminal/common/terminal.js';
+import { URI } from '../../../../../../base/common/uri.js';
+import { VSBuffer } from '../../../../../../base/common/buffer.js';
+import { generateUuid } from '../../../../../../base/common/uuid.js';
 
 export type TerminalManagerEvent =
 	| { readonly kind: 'started'; readonly terminalId: number; readonly terminalInstanceId: number; readonly command: string; readonly cwd?: string }
@@ -27,14 +30,28 @@ export class TerminalManager implements IDisposable {
 	private cancellationListeners: Map<number, IDisposable> = new Map();
 	private forceStopTimers: Map<number, ReturnType<typeof setTimeout>> = new Map();
 	private readonly eventEmitter = new Emitter<TerminalManagerEvent>();
+	private readonly spoolResources = new Map<number, URI>();
+	private readonly spoolWrites = new Map<number, Promise<void>>();
+	private readonly spoolErrors = new Map<number, Error>();
+	private readonly completedAt = new Map<number, number>();
+	private spoolRoot: URI | undefined;
+	private currentRunId = '';
+	private readonly terminalRuns = new Map<number, string>();
+	private readonly persistentTerminals = new Set<number>();
 	readonly onDidChange: Event<TerminalManagerEvent> = this.eventEmitter.event;
 
 	constructor(
 		private readonly terminalService: ITerminalService,
-		_fileService: IFileService
+		private readonly fileService: IFileService
 	) {}
 
-	public async executeCommand(command: string, cwd?: string, isBackground: boolean = false, timeoutMs = 10 * 60 * 1000, token: CancellationToken = CancellationToken.None): Promise<{ terminalId: number; terminalInstanceId: number; exitCode?: number; output: string }> {
+	public setRunScope(workspace: URI, runId: string): void {
+		const safeRunId = runId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(-160) || generateUuid();
+		this.spoolRoot = URI.joinPath(workspace, '.folzeur', 'agent-state', 'terminal-output', safeRunId);
+		this.currentRunId = runId;
+	}
+
+	public async executeCommand(command: string, cwd?: string, isBackground: boolean = false, timeoutMs = 10 * 60 * 1000, token: CancellationToken = CancellationToken.None, persistAfterTask = false): Promise<{ terminalId: number; terminalInstanceId: number; exitCode?: number; output: string }> {
 		if (!command.trim()) {
 			throw new Error('Command must not be empty.');
 		}
@@ -42,6 +59,16 @@ export class TerminalManager implements IDisposable {
 			throw new Error('Command exceeds the maximum supported length.');
 		}
 		const id = this.nextId++;
+		this.terminalRuns.set(id, this.currentRunId);
+		if (persistAfterTask) {this.persistentTerminals.add(id);}
+		this.pruneCompleted();
+		if (this.spoolRoot) {
+			await this.fileService.createFolder(this.spoolRoot);
+			const resource = URI.joinPath(this.spoolRoot, `${id}.log`);
+			this.spoolResources.set(id, resource);
+			await this.fileService.writeFile(resource, VSBuffer.fromString(''));
+			this.spoolWrites.set(id, Promise.resolve());
+		}
 		const terminal = await this.terminalService.createTerminal({
 			config: { name: `Agent Task #${id}` },
 			cwd
@@ -52,9 +79,8 @@ export class TerminalManager implements IDisposable {
 		this.eventEmitter.fire({ kind: 'started', terminalId: id, terminalInstanceId: terminal.instanceId, command: redactSecrets(command), cwd });
 		
 		const dataListener = terminal.onLineData((line: string) => {
-			// Append to file via hidden bash command or IPC if available.
-			// Since this is a browser context and direct FS is locked, we store a *tiny* tail for UI only, 
-			// and instruct the agent to use terminal output redirection instead for massive tasks.
+			// Keep a bounded UI preview while the file-service spool captures the complete
+			// redacted stream for paginated reads, including very large command output.
 			let currentOutput = this.outputs.get(id) || '';
 			const safeLine = redactSecrets(line);
 			currentOutput += safeLine + '\n';
@@ -64,6 +90,7 @@ export class TerminalManager implements IDisposable {
 				currentOutput = currentOutput.substring(currentOutput.length - 120_000);
 			}
 			this.outputs.set(id, currentOutput);
+			this.appendSpool(id, `${safeLine}\n`);
 			this.eventEmitter.fire({ kind: 'data', terminalId: id, data: `${safeLine}\n` });
 		});
 		this.dataListeners.set(id, dataListener);
@@ -153,11 +180,19 @@ export class TerminalManager implements IDisposable {
 		}
 	}
 
-	public async getUnretrievedOutput(id: number): Promise<{ output: string; exitCode?: number; running: boolean }> {
-		if (!this.outputs.has(id) && !this.completedExitCodes.has(id)) {return { output: `Terminal ${id} not found.`, running: false };}
+	public async getUnretrievedOutput(id: number, offset = 0, limit = 120_000): Promise<{ output: string; offset: number; nextOffset?: number; totalLength: number; exitCode?: number; running: boolean }> {
+		if (!this.outputs.has(id) && !this.completedExitCodes.has(id)) {return { output: `Terminal ${id} not found.`, offset: 0, totalLength: 0, running: false };}
+		await this.spoolWrites.get(id);
+		const spoolError = this.spoolErrors.get(id);
+		if (spoolError) {throw new Error(`Terminal ${id} output could not be persisted: ${spoolError.message}`);}
 		let output = this.outputs.get(id) ?? '';
-		if (output.length > 120_000) {output = `[TRUNCATED to last 120000 characters]\n${output.slice(-120_000)}`;}
-		return { output, exitCode: this.completedExitCodes.get(id), running: this.terminals.has(id) };
+		const resource = this.spoolResources.get(id);
+		if (resource && await this.fileService.exists(resource)) {output = (await this.fileService.readFile(resource)).value.toString();}
+		const safeOffset = Math.max(0, Math.min(Math.floor(offset), output.length));
+		const safeLimit = Math.max(1_000, Math.min(Math.floor(limit), 250_000));
+		const page = output.slice(safeOffset, safeOffset + safeLimit);
+		const nextOffset = safeOffset + page.length < output.length ? safeOffset + page.length : undefined;
+		return { output: page, offset: safeOffset, nextOffset, totalLength: output.length, exitCode: this.completedExitCodes.get(id), running: this.terminals.has(id) };
 	}
 
 	public interrupt(id: number): string {
@@ -184,6 +219,12 @@ export class TerminalManager implements IDisposable {
 		for (const id of [...this.terminals.keys()]) {this.interrupt(id);}
 	}
 
+	public cleanupRun(runId: string): void {
+		for (const [id, owner] of this.terminalRuns) {
+			if (owner === runId && !this.persistentTerminals.has(id)) {this.interrupt(id);}
+		}
+	}
+
 	private cleanup(id: number) {
 		const forceStopTimer = this.forceStopTimers.get(id);
 		if (forceStopTimer) {clearTimeout(forceStopTimer);}
@@ -195,6 +236,38 @@ export class TerminalManager implements IDisposable {
 		this.terminals.delete(id);
 		this.cancellationListeners.get(id)?.dispose();
 		this.cancellationListeners.delete(id);
+		this.terminalRuns.delete(id);
+		this.persistentTerminals.delete(id);
+		this.completedAt.set(id, Date.now());
+	}
+
+	private appendSpool(id: number, value: string): void {
+		const resource = this.spoolResources.get(id);
+		if (!resource) {return;}
+		const bytes = VSBuffer.fromString(value);
+		const pending = this.spoolWrites.get(id) ?? Promise.resolve();
+		this.spoolWrites.set(id, pending.then(async () => {
+			await this.fileService.writeFile(resource, bytes, { append: true });
+		}).catch(error => {
+			this.spoolErrors.set(id, error instanceof Error ? error : new Error(String(error)));
+		}));
+	}
+
+	private pruneCompleted(): void {
+		const cutoff = Date.now() - 60 * 60_000;
+		const sorted = [...this.completedAt.entries()].sort((a, b) => b[1] - a[1]);
+		for (let index = 0; index < sorted.length; index++) {
+			const [id, completed] = sorted[index];
+			if (index < 50 && completed >= cutoff) {continue;}
+			this.completedAt.delete(id);
+			this.completedExitCodes.delete(id);
+			this.outputs.delete(id);
+			const resource = this.spoolResources.get(id);
+			this.spoolResources.delete(id);
+			this.spoolWrites.delete(id);
+			this.spoolErrors.delete(id);
+			if (resource) {void this.fileService.del(resource, { recursive: false }).catch(() => undefined);}
+		}
 	}
 
 	public dispose() {
@@ -203,6 +276,12 @@ export class TerminalManager implements IDisposable {
 		this.forceStopTimers.clear();
 		for (const terminal of this.terminals.values()) {terminal.dispose();}
 		this.completedExitCodes.clear();
+		this.spoolResources.clear();
+		this.spoolWrites.clear();
+		this.spoolErrors.clear();
+		this.completedAt.clear();
+		this.terminalRuns.clear();
+		this.persistentTerminals.clear();
 		for (const listener of this.cancellationListeners.values()) {listener.dispose();}
 		this.cancellationListeners.clear();
 		for (const listener of this.dataListeners.values()) {

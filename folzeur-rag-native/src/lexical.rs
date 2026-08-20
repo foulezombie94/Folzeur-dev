@@ -6,7 +6,9 @@ use tantivy::query::QueryParser;
 use tantivy::schema::{Field, Schema, Value, STORED, STRING, TEXT};
 use tantivy::{doc, Index, IndexReader, IndexWriter, ReloadPolicy, TantivyDocument, Term};
 
-const INDEX_DIR: &str = "lexical-v2";
+pub const LEXICAL_SCHEMA_VERSION: u32 = 3;
+const INDEX_DIR: &str = "tantivy-v3";
+const VERSION_FILE: &str = "schema-version";
 
 #[derive(Clone)]
 struct Fields {
@@ -24,8 +26,8 @@ fn error(context: &str, source: impl std::fmt::Display) -> Error {
     Error::new(Status::GenericFailure, format!("{context}: {source}"))
 }
 
-fn open(workspace_path: &str) -> Result<(Index, Fields)> {
-    let directory = Path::new(workspace_path).join(".folzeur").join(INDEX_DIR);
+fn open(generation_root: &str) -> Result<(Index, Fields)> {
+    let directory = Path::new(generation_root).join(INDEX_DIR);
     std::fs::create_dir_all(&directory)
         .map_err(|source| error("Failed to create lexical index", source))?;
     let mut builder = Schema::builder();
@@ -39,11 +41,40 @@ fn open(workspace_path: &str) -> Result<(Index, Fields)> {
     let name = builder.add_text_field("name", TEXT | STORED);
     let schema = builder.build();
     let index = if directory.join("meta.json").exists() {
-        Index::open_in_dir(&directory)
+        let version = std::fs::read_to_string(directory.join(VERSION_FILE)).map_err(|source| {
+            error(
+                "Missing lexical schema version; controlled rebuild required",
+                source,
+            )
+        })?;
+        if version.trim() != LEXICAL_SCHEMA_VERSION.to_string() {
+            return Err(Error::new(
+                Status::GenericFailure,
+                format!(
+                    "Unsupported lexical schema version {}; expected {LEXICAL_SCHEMA_VERSION}",
+                    version.trim()
+                ),
+            ));
+        }
+        let index = Index::open_in_dir(&directory)
+            .map_err(|source| error("Failed to open lexical index", source))?;
+        if index.schema() != schema {
+            return Err(Error::new(
+                Status::GenericFailure,
+                "Tantivy schema does not match the current lexical schema",
+            ));
+        }
+        index
     } else {
-        Index::create_in_dir(&directory, schema)
-    }
-    .map_err(|source| error("Failed to open lexical index", source))?;
+        let index = Index::create_in_dir(&directory, schema)
+            .map_err(|source| error("Failed to create lexical index", source))?;
+        std::fs::write(
+            directory.join(VERSION_FILE),
+            LEXICAL_SCHEMA_VERSION.to_string(),
+        )
+        .map_err(|source| error("Failed to persist lexical schema version", source))?;
+        index
+    };
     Ok((
         index,
         Fields {
@@ -190,6 +221,14 @@ pub fn search(workspace_path: &str, query: &str, top_k: usize) -> Result<Vec<ser
             }))
         })
         .collect())
+}
+
+pub fn validate(generation_root: &str) -> Result<usize> {
+    let (index, _) = open(generation_root)?;
+    let reader: IndexReader = index
+        .reader()
+        .map_err(|source| error("Failed to open lexical reader during validation", source))?;
+    Ok(reader.searcher().num_docs() as usize)
 }
 
 #[cfg(test)]

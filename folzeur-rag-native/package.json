@@ -23,7 +23,9 @@
   "scripts": {
     "build": "napi build --platform --release",
     "build:debug": "napi build --platform",
-    "artifacts": "napi artifacts"
+    "artifacts": "napi artifacts",
+    "benchmark:retrieval": "node benchmarks/retrieval-gate.mjs",
+    "benchmark:scale": "node benchmarks/scale.mjs"
   },
   "devDependencies": {
     "@napi-rs/cli": "^2.16.0"

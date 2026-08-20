@@ -550,9 +550,14 @@ configurationRegistry.registerConfiguration({
 			description: nls.localize('chat.api.allowModelDownloads', "Allow the native code index to download local embedding and reranking model files. When disabled, code search continues with the local lexical index."),
 			default: false
 		},
+		'chat.api.nativeRagEnabled': {
+			type: 'boolean',
+			description: nls.localize('chat.api.nativeRagEnabled', "Enable the fully local persistent code index. This does not grant network access or model downloads."),
+			default: true
+		},
 		'chat.api.allowThirdPartyConfigs': {
 			type: 'boolean',
-			description: nls.localize('chat.api.allowThirdPartyConfigs', "Load workspace agent rules and custom modes as trusted instructions."),
+			description: nls.localize('chat.api.allowThirdPartyConfigs', "Expose workspace agent rules and custom modes to the model as explicitly labelled untrusted repository context."),
 			default: false
 		},
 		'chat.api.terminalMode': {
@@ -570,6 +575,12 @@ configurationRegistry.registerConfiguration({
 			type: 'boolean',
 			description: nls.localize('chat.api.allowMcp', "Allow configured Model Context Protocol connections in the native agent runtime."),
 			default: false
+		},
+		'chat.api.mcpTrustedReadOnlyServers': {
+			type: 'array',
+			items: { type: 'string' },
+			description: nls.localize('chat.api.mcpTrustedReadOnlyServers', "Server IDs whose readOnlyHint annotations may be trusted by the native agent policy. Other MCP tools are treated as external mutations."),
+			default: []
 		},
 		'chat.api.allowPlugins': {
 			type: 'boolean',

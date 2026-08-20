@@ -6,7 +6,7 @@
 import { hash } from '../../../../../../base/common/hash.js';
 import { AgentCommandRisk, classifyAgentCommand } from '../utils/AgentCommandPolicy.js';
 
-export type NativeToolEffect = 'read' | 'verification' | 'mutation' | 'control' | 'external_read' | 'external_mutation';
+export type NativeToolEffect = 'read' | 'verification' | 'mutation' | 'control' | 'external_read' | 'external_interaction' | 'external_mutation';
 export type NativeToolMetric = 'rag' | 'patch' | 'verification' | 'rollback' | 'delegate' | 'none';
 
 export interface NativeToolPolicy {
@@ -46,6 +46,7 @@ const POLICIES = new Map<string, NativeToolPolicy>([
 	['delete_file', { ...MUTATION(['path']), risk: 'destructive' }],
 	['rollback_task_changes', { ...MUTATION(['scope', 'files'], 'rollback'), risk: 'destructive' }],
 	['git_checkout', MUTATION(['mode', 'ref', 'path'])],
+	['git_operation', MUTATION(['operation', 'name', 'path', 'remote', 'branch'])],
 	['package_manager', MUTATION(['packageManager', 'arguments'])],
 	['launch_local_app', { effect: 'control', risk: 'caution', parallelSafe: false, coalescible: false, requiresConfirmation: true, targetKeys: ['path'], metric: 'none' }],
 	['run_tests', { effect: 'verification', risk: 'caution', parallelSafe: false, coalescible: false, requiresConfirmation: true, targetKeys: ['command', 'cwd'], metric: 'verification' }],
@@ -54,7 +55,6 @@ const POLICIES = new Map<string, NativeToolPolicy>([
 	['attempt_completion', CONTROL()],
 	['ask_followup_question', CONTROL(['question'])],
 	['delegate_analysis', { effect: 'read', risk: 'safe', parallelSafe: false, coalescible: false, requiresConfirmation: false, targetKeys: ['requests'], metric: 'delegate' }],
-	['manage_terminal', { effect: 'external_mutation', risk: 'caution', parallelSafe: false, coalescible: false, requiresConfirmation: true, targetKeys: ['terminalId', 'action'], metric: 'none' }],
 ]);
 
 const UNKNOWN_POLICY: NativeToolPolicy = {
@@ -72,11 +72,22 @@ export function resolveNativeToolPolicy(name: string, parameters: Readonly<Recor
 	if (name === 'execute_command' || name === 'run_command' || name === 'run_background') {
 		return commandPolicy(classifyAgentCommand(String(parameters.command ?? '')));
 	}
+	if (name === 'git_operation') {
+		const operation = String(parameters.operation ?? '');
+		if (['branch_list', 'stash_list', 'show', 'blame', 'rev_parse', 'worktree_list'].includes(operation)) {return READ(['operation', 'name', 'ref', 'path']);}
+		if (['restore', 'branch_delete', 'worktree_remove', 'merge_abort', 'rebase', 'rebase_abort'].includes(operation)) {return { ...MUTATION(['operation', 'name', 'ref', 'path']), risk: 'destructive' };}
+	}
 	if (name === 'browser_action') {
 		const action = String(parameters.action ?? '');
-		if (action === 'screenshot' || action === 'get_console_logs') {return { ...READ(['sessionId', 'action']), effect: 'external_read' };}
-		if (action === 'close') {return { ...CONTROL(['sessionId', 'action']), effect: 'external_mutation', risk: 'caution', requiresConfirmation: false };}
-		return { ...UNKNOWN_POLICY, effect: action === 'launch' ? 'external_read' : 'external_mutation', targetKeys: ['sessionId', 'action', 'url', 'selector'] };
+		if (action === 'get_storage_value') {return { effect: 'external_read', risk: 'caution', parallelSafe: true, coalescible: false, requiresConfirmation: true, targetKeys: ['sessionId', 'action', 'storageArea', 'storageKey'], metric: 'none' };}
+		if (['screenshot', 'get_console_logs', 'get_network_logs', 'get_text', 'get_title', 'inspect_dom', 'accessibility_snapshot', 'get_storage', 'list_storage_keys', 'wait_for', 'assert', 'evaluate'].includes(action)) {return { ...READ(['sessionId', 'action', 'selector', 'assertion', 'expected']), effect: 'external_read' };}
+		if (action === 'close') {return { ...CONTROL(['sessionId', 'action']), effect: 'control', risk: 'safe', requiresConfirmation: false };}
+		return { ...UNKNOWN_POLICY, effect: action === 'launch' ? 'external_read' : 'external_interaction', targetKeys: ['sessionId', 'action', 'url', 'selector'] };
+	}
+	if (name === 'manage_terminal') {
+		return String(parameters.action ?? '') === 'get_output'
+			? READ(['terminalId', 'action'])
+			: { effect: 'external_interaction', risk: 'caution', parallelSafe: false, coalescible: false, requiresConfirmation: true, targetKeys: ['terminalId', 'action'], metric: 'none' };
 	}
 	return POLICIES.get(name) ?? UNKNOWN_POLICY;
 }

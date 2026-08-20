@@ -16,11 +16,10 @@ export interface CommandSandboxAssessment {
 }
 
 const SHELL_CONTROL = /(?:\r|\n|[;&|><`]|\$\(|\$\{|\^\(|%\w+%|!\w+!)/;
-const READ_ONLY_COMMAND = /^(?:git\s+(?:status|diff|log|show|branch\s+--show-current)\b|(?:rg|grep)\b)/i;
-const TEST_COMMAND = /^(?:(?:npm|pnpm)\s+(?:test\b|run\s+[\w:.-]*test[\w:.-]*\b)|yarn\s+(?:test\b|[\w:.-]*test[\w:.-]*\b)|cargo\s+test\b|(?:python(?:3)?\s+-m\s+)?pytest\b|(?:npx\s+)?(?:vitest|jest|mocha)\b|go\s+test\b|dotnet\s+test\b)/i;
-const BUILD_COMMAND = /^(?:(?:npm|pnpm)\s+run\s+(?:build|compile|typecheck|check|lint)(?::[\w.-]+)?\b|yarn\s+(?:build|compile|typecheck|check|lint)\b|cargo\s+(?:build|check|clippy)\b|(?:npx\s+)?tsc\b|go\s+build\b|dotnet\s+build\b)/i;
+const READ_ONLY_COMMAND = /^(?:git\s+(?:status|diff|log|show|ls-files|rev-parse|remote\s+-v|branch\s+(?:--show-current|--list))\b|(?:rg|grep)\b|(?:ls|dir|pwd|tree)\b|(?:get-childitem|get-location|get-content|select-string)\b|cargo\s+(?:metadata|tree|version)\b|(?:node|npm|pnpm|yarn|bun|deno|python|python3|pip|uv|poetry|go|dotnet|java|mvn|gradle|rustc)\s+(?:--?version|--?info|list|tree|metadata)\b)/i;
+const TEST_COMMAND = /^(?:(?:npm|pnpm|bun)\s+(?:test\b|run\s+[\w:.-]*test[\w:.-]*\b)|yarn\s+(?:test\b|[\w:.-]*test[\w:.-]*\b)|deno\s+test\b|cargo\s+test\b|(?:python(?:3)?\s+-m\s+)?pytest\b|(?:uv\s+run\s+|poetry\s+run\s+)?pytest\b|(?:npx\s+)?(?:vitest|jest|mocha)\b|go\s+test\b|dotnet\s+test\b|(?:mvnw?|gradlew?)\s+test\b|bundle\s+exec\s+rspec\b|phpunit\b|swift\s+test\b)/i;
+const BUILD_COMMAND = /^(?:(?:npm|pnpm|bun)\s+run\s+(?:build|compile|typecheck|check|lint)(?::[\w.-]+)?\b|yarn\s+(?:build|compile|typecheck|check|lint)\b|(?:npx\s+)?(?:nx|turbo)\s+(?:build|test|lint|typecheck)\b|deno\s+(?:check|lint)\b|cargo\s+(?:build|check|clippy)\b|(?:npx\s+)?tsc\b|go\s+(?:build|vet)\b|dotnet\s+build\b|(?:mvnw?|gradlew?)\s+(?:build|check|verify)\b|(?:cmake|make|bazel)\b|swift\s+build\b|composer\s+(?:validate|check-platform-reqs)\b|ruby\s+-c\b|php\s+-l\b|(?:curl|wget)\b[^\r\n]*(?:localhost|127\.0\.0\.1))/i;
 const DESTRUCTIVE_COMMAND = /(?:^|[\s;&|()])(?:rm\s+-[^\r\n;&|]*r[^\r\n;&|]*f|(?:remove-item|ri)\b[^\r\n;&|]*(?:-recurse|-force)|(?:rmdir|rd|del|erase)\b[^\r\n;&|]*(?:\/(?:s|q)|-recurse|-force)|git\s+(?:reset\s+--hard|clean\s+-[^\r\n;&|]*f|push\b[^\r\n;&|]*--force)|format\s+[a-z]:|diskpart\b|(?:drop\s+(?:database|table|schema)|truncate\s+table)\b|(?:shutdown|stop-computer|restart-computer|taskkill|kill)\b|(?:reg|sc)\s+delete\b|docker\s+(?:system|volume|image)\s+prune\b|kubectl\s+delete\b|terraform\s+destroy\b|powershell(?:\.exe)?\b[^\r\n;&|]*(?:-encodedcommand|-enc)\b)/i;
-const NESTED_INTERPRETER = /^(?:python(?:3|\.exe)?\s+-c\b|node(?:\.exe)?\s+(?:-e|--eval)\b|(?:powershell|pwsh)(?:\.exe)?\s+(?:-c|-command|-encodedcommand|-enc)\b|cmd(?:\.exe)?\s+\/(?:c|k)\b|(?:ba|z|fi)?sh\s+-c\b)/i;
 const EMPTY_VERIFICATION = /(?:\bno tests? (?:found|collected|ran)\b|\b0 tests?\b|\b0 passing\b|command not found|is not recognized as an internal or external command)/i;
 
 function normalize(command: string): string {
@@ -69,23 +68,14 @@ export function isAllowlistedCommand(command: string, configuredPrefixes: readon
 export function assessCommandSandbox(command: string, cwd: string): CommandSandboxAssessment {
 	const normalizedCwd = normalizePath(cwd);
 	if (!normalizedCwd) {return { allowed: false, reason: 'the terminal workspace is not available' };}
-	if (/\0|\r|\n/.test(command)) {return { allowed: false, reason: 'multiline or null-containing commands are not accepted' };}
-	if (hasShellControlOperators(command)) {return { allowed: false, reason: 'shell chaining, substitution, and redirection are not accepted by the terminal boundary' };}
-	if (NESTED_INTERPRETER.test(normalize(command))) {return { allowed: false, reason: 'nested interpreter code cannot be constrained to the workspace boundary' };}
-	if (/(?:^|\s)(?:\.\.[\\/])|(?:^|\s)~[\\/]|\$(?:env:)?[A-Za-z_][A-Za-z0-9_]*|%[A-Za-z_][A-Za-z0-9_]*%/i.test(command)) {
-		return { allowed: false, reason: 'the command contains an unresolved path outside the workspace' };
-	}
-	const absolutePaths = command.match(/(?:[A-Za-z]:[\\/][^\s"'`;|<>]+|\\\\[^\s"'`;|<>]+|\/(?:[^\s"'`;|<>]+\/)+[^\s"'`;|<>]*)/g) ?? [];
-	for (const path of absolutePaths) {
-		const normalized = normalizePath(path);
-		if (normalized && normalized !== normalizedCwd && !normalized.startsWith(`${normalizedCwd}/`)) {
-			return { allowed: false, reason: `absolute target is outside the workspace: ${path}` };
-		}
-	}
-	return { allowed: true, reason: 'command targets remain inside the workspace boundary' };
+	if (/\0/.test(command)) {return { allowed: false, reason: 'null-containing commands are not accepted' };}
+	// Shell syntax and interpreters are supported when the OS-backed sandbox is active.
+	// If it is unavailable, TerminalSandboxBoundary blocks every write-capable command
+	// unless the user grants the explicit unsandboxed-host permission.
+	return { allowed: true, reason: 'the operating-system terminal sandbox enforces the workspace boundary' };
 }
 
-export function assessVerification(toolName: 'run_tests' | 'build', command: string, exitCode: number | undefined, output: string): VerificationAssessment {
+export function assessVerification(toolName: 'run_tests' | 'build' | 'run_command' | 'execute_command', command: string, exitCode: number | undefined, output: string): VerificationAssessment {
 	const normalized = normalize(command);
 	if (exitCode !== 0) {
 		return { accepted: false, reason: `verification command exited with code ${String(exitCode)}` };
@@ -93,9 +83,9 @@ export function assessVerification(toolName: 'run_tests' | 'build', command: str
 	if (!normalized || hasShellControlOperators(command)) {
 		return { accepted: false, reason: 'verification commands must be one direct command without shell control operators' };
 	}
-	const matchesRunner = toolName === 'run_tests' ? TEST_COMMAND.test(normalized) : BUILD_COMMAND.test(normalized);
+	const matchesRunner = toolName === 'run_tests' ? TEST_COMMAND.test(normalized) : toolName === 'build' ? BUILD_COMMAND.test(normalized) : TEST_COMMAND.test(normalized) || BUILD_COMMAND.test(normalized);
 	if (!matchesRunner) {
-		return { accepted: false, reason: `command is not a recognized ${toolName === 'run_tests' ? 'test runner' : 'build/typecheck runner'}` };
+		return { accepted: false, reason: `command is not a recognized ${toolName === 'run_tests' ? 'test runner' : toolName === 'build' ? 'build/typecheck runner' : 'test, lint, typecheck, build, or HTTP smoke verification'}` };
 	}
 	if (toolName === 'run_tests' && EMPTY_VERIFICATION.test(output)) {
 		return { accepted: false, reason: 'the test runner did not execute any tests' };

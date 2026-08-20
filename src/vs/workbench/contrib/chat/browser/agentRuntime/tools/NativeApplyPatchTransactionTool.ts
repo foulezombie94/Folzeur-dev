@@ -3,13 +3,13 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { hash } from '../../../../../../base/common/hash.js';
 import { URI } from '../../../../../../base/common/uri.js';
 import { ITextFileService } from '../../../../../services/textfile/common/textfiles.js';
 import { NativeSearchReplaceStrategy } from '../diff/NativeSearchReplaceStrategy.js';
 import { WorkspaceIgnoreGuard } from '../utils/WorkspaceIgnoreGuard.js';
 import { INativeTool } from './INativeTool.js';
 import { IFolzeurAgentService } from '../../../../../../platform/folzeurAgent/common/folzeurAgent.js';
+import { sha256 } from '../utils/AgentStateCrypto.js';
 
 interface TransactionChange {
 	readonly filePath: string;
@@ -30,7 +30,7 @@ export class NativeApplyPatchTransactionTool implements INativeTool {
 					type: 'object', additionalProperties: false,
 					properties: {
 						filePath: { type: 'string', minLength: 1, maxLength: 32_768 },
-						expectedHash: { type: 'string', minLength: 1, maxLength: 128 },
+						expectedHash: { type: 'string', pattern: '^[a-f0-9]{64}$' },
 						diffContent: { type: 'string', minLength: 1, maxLength: 2_000_000 },
 					},
 					required: ['filePath', 'expectedHash', 'diffContent'],
@@ -56,7 +56,7 @@ export class NativeApplyPatchTransactionTool implements INativeTool {
 			unique.add(key);
 			if (this.textFileService.isDirty(uri)) {return { success: false, error: `Edit conflict: ${change.filePath} has unsaved editor changes.` };}
 			const original = (await this.textFileService.read(uri)).value;
-			if (hash(original).toString(16) !== change.expectedHash) {return { success: false, error: `Edit conflict: ${change.filePath} changed after it was read.` };}
+			if (await sha256(original) !== change.expectedHash) {return { success: false, error: `Edit conflict: ${change.filePath} changed after it was read.` };}
 			let result: { success: boolean; content?: string; error?: string };
 			try {
 				const raw = this.backend?.isSupported ? await this.backend.request('apply_search_replace_blocks', { originalContent: original, diffContent: change.diffContent, filePath: change.filePath }) : undefined;
@@ -74,16 +74,16 @@ export class NativeApplyPatchTransactionTool implements INativeTool {
 			for (const change of validated) {
 				if (this.textFileService.isDirty(change.uri)) {return { success: false, error: `Edit conflict before commit: ${change.filePath} has unsaved editor changes.` };}
 				const current = (await this.textFileService.read(change.uri)).value;
-				if (hash(current).toString(16) !== hash(change.original).toString(16)) {return { success: false, error: `Edit conflict before commit: ${change.filePath} changed during transaction validation.` };}
+				if (current !== change.original) {return { success: false, error: `Edit conflict before commit: ${change.filePath} changed during transaction validation.` };}
 			}
 			for (const change of validated) {
 				if (this.textFileService.isDirty(change.uri)) {throw new Error(`Edit conflict during commit: ${change.filePath} has unsaved editor changes.`);}
 				const beforeWrite = (await this.textFileService.read(change.uri)).value;
-				if (hash(beforeWrite).toString(16) !== hash(change.original).toString(16)) {throw new Error(`Edit conflict during commit: ${change.filePath} changed before its write.`);}
+				if (beforeWrite !== change.original) {throw new Error(`Edit conflict during commit: ${change.filePath} changed before its write.`);}
 				await this.textFileService.write(change.uri, change.updated);
 				committed.push(change);
 				const afterWrite = (await this.textFileService.read(change.uri)).value;
-				if (hash(afterWrite).toString(16) !== hash(change.updated).toString(16)) {throw new Error(`Transaction verification failed after writing ${change.filePath}.`);}
+				if (afterWrite !== change.updated) {throw new Error(`Transaction verification failed after writing ${change.filePath}.`);}
 			}
 			return { success: true, files: committed.map(change => change.filePath) };
 		} catch (error) {
@@ -91,7 +91,7 @@ export class NativeApplyPatchTransactionTool implements INativeTool {
 			for (const change of committed) {
 				try {
 					const current = (await this.textFileService.read(change.uri)).value;
-					if (hash(current).toString(16) !== hash(change.updated).toString(16)) {rollbackConflicts.push(`${change.filePath} has newer concurrent changes`);}
+					if (current !== change.updated) {rollbackConflicts.push(`${change.filePath} has newer concurrent changes`);}
 				} catch (rollbackError) {
 					rollbackConflicts.push(`${change.filePath}: ${String(rollbackError)}`);
 				}

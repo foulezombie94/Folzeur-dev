@@ -12,7 +12,8 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
-const TABLE_NAME: &str = "code_chunks_v2";
+pub const RAG_SCHEMA_VERSION: u32 = 3;
+const TABLE_NAME: &str = "code_chunks_v3";
 const ANN_MIN_ROWS: usize = 256;
 const VECTOR_DIMENSION: i32 = crate::embedder::EMBEDDING_DIMENSION;
 
@@ -38,8 +39,8 @@ fn schema() -> Arc<Schema> {
     ]))
 }
 
-pub async fn get_connection(workspace_path: &str) -> Result<Connection> {
-    let db_path = Path::new(workspace_path).join(".folzeur").join("rag-v2");
+pub async fn get_connection(generation_root: &str) -> Result<Connection> {
+    let db_path = Path::new(generation_root).join("lancedb-v3");
     connect(db_path.to_string_lossy().as_ref())
         .execute()
         .await
@@ -62,7 +63,13 @@ pub async fn existing_embeddings(
     let connection = get_connection(workspace_path).await?;
     let table = match connection.open_table(TABLE_NAME).execute().await {
         Ok(table) => table,
-        Err(_) => return Ok(HashMap::new()),
+        Err(lancedb::Error::TableNotFound { .. }) => return Ok(HashMap::new()),
+        Err(source) => {
+            return Err(error(
+                "Failed to open vector table for cached embeddings",
+                source,
+            ))
+        }
     };
     let mut stream = table
         .query()
@@ -105,11 +112,15 @@ pub async fn existing_embeddings(
 
 pub async fn delete_file_chunks(workspace_path: &str, file_path: &str) -> Result<()> {
     let connection = get_connection(workspace_path).await?;
-    if let Ok(table) = connection.open_table(TABLE_NAME).execute().await {
-        table
-            .delete(&format!("file_path = '{}'", escape_sql(file_path)))
-            .await
-            .map_err(|source| error("Failed to delete stale vectors", source))?;
+    match connection.open_table(TABLE_NAME).execute().await {
+        Ok(table) => {
+            table
+                .delete(&format!("file_path = '{}'", escape_sql(file_path)))
+                .await
+                .map_err(|source| error("Failed to delete stale vectors", source))?;
+        }
+        Err(lancedb::Error::TableNotFound { .. }) => {}
+        Err(source) => return Err(error("Failed to open vector table for deletion", source)),
     }
     Ok(())
 }
@@ -201,13 +212,14 @@ pub async fn upsert_chunks(
                 .await
                 .map_err(|source| error("Atomic vector upsert failed", source))?;
         }
-        Err(_) => {
+        Err(lancedb::Error::TableNotFound { .. }) => {
             connection
                 .create_table(TABLE_NAME, vec![batch])
                 .execute()
                 .await
                 .map_err(|source| error("Failed to create vector table", source))?;
         }
+        Err(source) => return Err(error("Failed to open vector table for upsert", source)),
     }
     Ok(())
 }
@@ -217,7 +229,13 @@ pub async fn ensure_indices(workspace_path: &str) -> Result<()> {
     let connection = get_connection(workspace_path).await?;
     let table = match connection.open_table(TABLE_NAME).execute().await {
         Ok(table) => table,
-        Err(_) => return Ok(()),
+        Err(lancedb::Error::TableNotFound { .. }) => return Ok(()),
+        Err(source) => {
+            return Err(error(
+                "Failed to open vector table while ensuring indices",
+                source,
+            ))
+        }
     };
     let existing = table
         .list_indices()
@@ -230,7 +248,11 @@ pub async fn ensure_indices(workspace_path: &str) -> Result<()> {
             .await
             .map_err(|source| error("Failed to create file path index", source))?;
     }
-    if table.count_rows(None).await.unwrap_or(0) >= ANN_MIN_ROWS
+    if table
+        .count_rows(None)
+        .await
+        .map_err(|source| error("Failed to count vector rows", source))?
+        >= ANN_MIN_ROWS
         && !existing.iter().any(|index| index.columns == ["vector"])
     {
         let index = IvfHnswSqIndexBuilder::default().distance_type(DistanceType::Cosine);
@@ -258,7 +280,8 @@ pub async fn search_chunks(
     let connection = get_connection(workspace_path).await?;
     let table = match connection.open_table(TABLE_NAME).execute().await {
         Ok(table) => table,
-        Err(_) => return Ok(Vec::new()),
+        Err(lancedb::Error::TableNotFound { .. }) => return Ok(Vec::new()),
+        Err(source) => return Err(error("Failed to open vector table for search", source)),
     };
     let mut stream = table
         .query()
@@ -303,6 +326,34 @@ pub async fn search_chunks(
         }
     }
     Ok(output)
+}
+
+pub async fn validate(generation_root: &str) -> Result<usize> {
+    let connection = get_connection(generation_root).await?;
+    let table = match connection.open_table(TABLE_NAME).execute().await {
+        Ok(table) => table,
+        Err(lancedb::Error::TableNotFound { .. }) => return Ok(0),
+        Err(source) => {
+            return Err(error(
+                "Failed to open vector table during validation",
+                source,
+            ))
+        }
+    };
+    let actual = table
+        .schema()
+        .await
+        .map_err(|source| error("Failed to read vector schema", source))?;
+    if actual.as_ref() != schema().as_ref() {
+        return Err(Error::new(
+            Status::GenericFailure,
+            "LanceDB schema does not match the current RAG schema",
+        ));
+    }
+    table
+        .count_rows(None)
+        .await
+        .map_err(|source| error("Failed to count vectors during validation", source))
 }
 
 #[cfg(test)]
