@@ -34,7 +34,8 @@ suite('Native browser storage', () => {
 				userEmail: '[REDACTED]',
 			},
 		});
-		assert.strictEqual(resolveNativeToolPolicy('browser_action', { action: 'get_storage_value', storageKey: 'theme' }).requiresConfirmation, true);
+		assert.strictEqual(resolveNativeToolPolicy('browser_action', { action: 'get_storage_value', storageKey: 'theme' }).requiresConfirmation, false);
+		assert.strictEqual(resolveNativeToolPolicy('browser_action', { action: 'get_storage_value', storageKey: 'access_token' }).requiresConfirmation, true);
 		assert.strictEqual(resolveNativeToolPolicy('browser_action', { action: 'list_storage_keys' }).requiresConfirmation, false);
 	});
 

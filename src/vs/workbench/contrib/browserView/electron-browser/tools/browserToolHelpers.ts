@@ -8,7 +8,7 @@ import { URI } from '../../../../../base/common/uri.js';
 import { localize } from '../../../../../nls.js';
 import { BrowserViewUri } from '../../../../../platform/browserView/common/browserViewUri.js';
 import { IInvokeFunctionResult, IPlaywrightService } from '../../../../../platform/browserView/common/playwrightService.js';
-import { evaluateBrowserPolicy } from '../../../../../platform/browserView/common/browserPolicy.js';
+import { BROWSER_SAFETY_LIMITS, evaluateBrowserPolicy } from '../../../../../platform/browserView/common/browserPolicy.js';
 import { IAgentNetworkFilterService } from '../../../../../platform/networkFilter/common/networkFilterService.js';
 import { IEditorService } from '../../../../services/editor/common/editorService.js';
 import { IToolInvocation, IToolResult, type IPreparedToolInvocation, type IToolInvocationPreparationContext } from '../../../chat/common/tools/languageModelToolsService.js';
@@ -67,11 +67,11 @@ export async function getBrowserPolicyConfirmation(
 	if (!decision.allowed) { throw new Error(decision.reason); }
 	if (!decision.requiresConfirmation) { return undefined; }
 	return {
-		title: decision.access === 'sensitive'
+		title: decision.risk === 'dangerous'
 			? localize('browser.policy.sensitiveTitle', 'Confirm Sensitive Browser Action')
 			: localize('browser.policy.interactTitle', 'Allow Browser Interaction?'),
 		message: localize('browser.policy.confirmMessage', '{0}\n\nTarget: {1}', decision.reason, metadata.url),
-		allowAutoConfirm: decision.access !== 'sensitive',
+		allowAutoConfirm: decision.risk !== 'dangerous',
 	};
 }
 
@@ -190,8 +190,19 @@ export async function playwrightInvoke<TArgs extends unknown[], TReturn>(
 	fn: (page: Page, ...args: TArgs) => Promise<TReturn>,
 	...args: TArgs
 ): Promise<IToolResult> {
+	return playwrightInvokeWithTimeout(playwrightService, sessionId, pageId, BROWSER_SAFETY_LIMITS.clickTimeoutMs, fn, ...args);
+}
+
+export async function playwrightInvokeWithTimeout<TArgs extends unknown[], TReturn>(
+	playwrightService: IPlaywrightService,
+	sessionId: string,
+	pageId: string,
+	timeoutMs: number,
+	fn: (page: Page, ...args: TArgs) => Promise<TReturn>,
+	...args: TArgs
+): Promise<IToolResult> {
 	try {
-		const result = await playwrightService.invokeFunction(sessionId, pageId, fn.toString(), args, 30_000);
+		const result = await playwrightService.invokeFunction(sessionId, pageId, fn.toString(), args, timeoutMs);
 		return invokeFunctionResultToToolResult(result);
 	} catch (e) {
 		return errorResult(e instanceof Error ? e.message : String(e));

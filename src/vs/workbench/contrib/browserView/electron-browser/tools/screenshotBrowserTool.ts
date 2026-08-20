@@ -181,6 +181,7 @@ export class ScreenshotBrowserTool implements IToolImpl {
 		if (!browserViewModel) {
 			return errorResult(`No browser page found with ID ${params.pageId}`);
 		}
+		await this.playwrightService.recordScreenshot(sessionId, params.pageId);
 
 		const bounds = selector && await playwrightInvokeRaw(this.playwrightService, sessionId, params.pageId, async (page, selector, scrollIntoViewIfNeeded) => {
 			const locator = page.locator(selector);

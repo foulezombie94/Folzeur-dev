@@ -19,6 +19,7 @@ import { BrowserPageOwnership } from '../common/browserPageOwnership.js';
 import { hash } from '../../../base/common/hash.js';
 import { join } from '../../../base/common/path.js';
 import { promises as fs } from 'fs';
+import { BROWSER_SAFETY_LIMITS } from '../common/browserPolicy.js';
 
 // eslint-disable-next-line local/code-import-patterns
 import type { Browser, BrowserContext, ConnectOverCDPTransport, Page } from 'playwright-core';
@@ -31,12 +32,20 @@ export interface IPlaywrightActionScope {
 }
 
 const DEFERRED_RESULT_CLEANUP_MS = 5 * 60_000; // 5 minutes
-const SESSION_INACTIVITY_MS = 30 * 60_000; // 30 minutes
-const OPEN_PAGE_NAVIGATION_TIMEOUT_MS = 30_000;
-const MAX_SESSION_ACTIONS = 200;
-const MAX_SESSION_NAVIGATIONS = 40;
+const SESSION_INACTIVITY_MS = BROWSER_SAFETY_LIMITS.idleLifetimeMs;
+const MAX_SESSION_LIFETIME_MS = BROWSER_SAFETY_LIMITS.sessionLifetimeMs;
+const OPEN_PAGE_NAVIGATION_TIMEOUT_MS = BROWSER_SAFETY_LIMITS.navigationTimeoutMs;
+const SOFT_SESSION_ACTION_LIMIT = BROWSER_SAFETY_LIMITS.softActions;
+const MAX_SESSION_ACTIONS = BROWSER_SAFETY_LIMITS.hardActions;
+const SOFT_SESSION_NAVIGATION_LIMIT = BROWSER_SAFETY_LIMITS.softNavigations;
+const MAX_SESSION_NAVIGATIONS = BROWSER_SAFETY_LIMITS.hardNavigations;
 const MAX_RUN_CODE_ACTIONS = 30;
-const MAX_IDENTICAL_ACTIONS = 5;
+const WARN_IDENTICAL_ACTIONS = BROWSER_SAFETY_LIMITS.warnRepeatedActions;
+const MAX_IDENTICAL_ACTIONS = BROWSER_SAFETY_LIMITS.hardRepeatedActions;
+const MAX_SESSION_TABS = BROWSER_SAFETY_LIMITS.maxTabs;
+const MAX_SESSION_SCREENSHOTS = BROWSER_SAFETY_LIMITS.maxScreenshots;
+const MAX_PLAYWRIGHT_CODE_CHARS = BROWSER_SAFETY_LIMITS.maxPlaywrightCodeChars;
+const MAX_PLAYWRIGHT_RESULT_CHARS = BROWSER_SAFETY_LIMITS.maxPlaywrightResultChars;
 
 /**
  * Narrow a raw Playwright transport payload to a {@link CDPRequest}.
@@ -275,6 +284,7 @@ export class PlaywrightService extends Disposable implements IPlaywrightService 
 			throw new Error(`Page "${viewId}" has not been shared with the agent.`);
 		}
 		if (this._ownership.owns(sessionId, viewId)) { return; }
+		if (this._ownership.ownedPages(sessionId).length >= MAX_SESSION_TABS) { throw new Error(`Integrated browser tab budget exceeded (${MAX_SESSION_TABS}).`); }
 		this._ownership.claim(sessionId, viewId);
 		try {
 			const session = await this._getOrCreateSession(sessionId);
@@ -313,6 +323,12 @@ export class PlaywrightService extends Disposable implements IPlaywrightService 
 		return session.getPageMetadata(pageId);
 	}
 
+	async recordScreenshot(sessionId: string, pageId: string): Promise<void> {
+		this._requireOwnedPage(sessionId, pageId);
+		const session = await this._getOrCreateSession(sessionId);
+		session.recordScreenshot(pageId);
+	}
+
 	async invokeFunctionRaw<T>(sessionId: string, pageId: string, fnDef: string, ...args: unknown[]): Promise<T> {
 		this._requireOwnedPage(sessionId, pageId);
 		const session = await this._getOrCreateSession(sessionId);
@@ -322,12 +338,12 @@ export class PlaywrightService extends Disposable implements IPlaywrightService 
 	async invokeFunction(sessionId: string, pageId: string, fnDef: string, args: unknown[] = [], timeoutMs?: number, isArbitraryCode = false): Promise<IInvokeFunctionResult> {
 		this._requireOwnedPage(sessionId, pageId);
 		const session = await this._getOrCreateSession(sessionId);
-		return session.invokeFunction(pageId, fnDef, args, timeoutMs, isArbitraryCode);
+		return boundInvokeFunctionResult(await session.invokeFunction(pageId, fnDef, args, timeoutMs, isArbitraryCode));
 	}
 
 	async waitForDeferredResult(sessionId: string, deferredResultId: string, timeoutMs: number): Promise<IInvokeFunctionResult> {
 		const session = await this._getOrCreateSession(sessionId);
-		return session.waitForDeferredResult(deferredResultId, timeoutMs);
+		return boundInvokeFunctionResult(await session.waitForDeferredResult(deferredResultId, timeoutMs));
 	}
 
 	async replyToFileChooser(sessionId: string, pageId: string, files: string[]): Promise<{ summary: string }> {
@@ -405,8 +421,10 @@ class PlaywrightSession extends Disposable {
 	private _actionCount = 0;
 	private _navigationCount = 0;
 	private _runCodeCount = 0;
+	private _screenshotCount = 0;
 	private _lastAction = '';
 	private _identicalActionCount = 0;
+	private readonly _createdAt = Date.now();
 
 	// --- Page matching ---
 
@@ -502,6 +520,11 @@ class PlaywrightSession extends Disposable {
 		return { url: page.url(), title: await page.title().catch(() => '') };
 	}
 
+	recordScreenshot(pageId: string): void {
+		this._guardAction(`screenshot:${pageId}`);
+		if (++this._screenshotCount > MAX_SESSION_SCREENSHOTS) { throw new Error(`Integrated browser screenshot budget exceeded (${MAX_SESSION_SCREENSHOTS}).`); }
+	}
+
 	async invokeFunctionRaw<T>(pageId: string, fnDef: string, ...args: unknown[]): Promise<T> {
 		this._guardAction(`raw:${pageId}:${fnDef}`);
 		const fn = await this._compileFunction(fnDef);
@@ -534,6 +557,9 @@ class PlaywrightSession extends Disposable {
 		}
 		const wrappedCallback = async (page: Page) => fn(createPageApiProxy(page, logCtx.pageMethodsCalled), args);
 
+		if (timeoutMs !== undefined && isArbitraryCode) {
+			return this._runWithHardTimeout(pageId, wrappedCallback, timeoutMs, logCtx);
+		}
 		if (timeoutMs !== undefined) {
 			return this._runWithDeferral(pageId, wrappedCallback, timeoutMs, undefined, logCtx);
 		}
@@ -660,6 +686,31 @@ class PlaywrightSession extends Disposable {
 		return { result, error, summary, deferredResultId };
 	}
 
+	private async _runWithHardTimeout(pageId: string, callback: (page: Page) => Promise<unknown>, timeoutMs: number, logCtx: IExecutionLogContext): Promise<IInvokeFunctionResult> {
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		let timedOut = false;
+		try {
+			const result = await Promise.race([
+				this._runAgainstPage(pageId, callback),
+				new Promise<never>((_resolve, reject) => timer = setTimeout(() => { timedOut = true; reject(new Error(`Playwright code timed out after ${timeoutMs} ms.`)); }, timeoutMs)),
+			]);
+			this._logExecution(logCtx, true);
+			return { result, summary: await this._getSummary(pageId) };
+		} catch (error) {
+			this._logExecution(logCtx, false);
+			const message = error instanceof Error ? error.message : String(error);
+			if (timedOut || /Script execution timed out/.test(message)) {
+				// Disconnect the automation client so timed-out code cannot keep issuing
+				// browser mutations in the background. User-owned browser views remain.
+				await this._browser.close().catch(() => undefined);
+				return { error: message, summary: 'Automation session terminated after a hard Playwright-code timeout.' };
+			}
+			return { error: message, summary: await this._getSummary(pageId) };
+		} finally {
+			if (timer !== undefined) { clearTimeout(timer); }
+		}
+	}
+
 	/**
 	 * Emit completion telemetry for a single {@link invokeFunction} call, once the
 	 * page work settles. Idempotent: only the first call for a given context emits,
@@ -689,17 +740,25 @@ class PlaywrightSession extends Disposable {
 	}
 
 	private async _compileFunction(fnDef: string): Promise<(page: Page, args: unknown[]) => unknown> {
-		if (fnDef.length > 20_000) { throw new Error('Playwright code exceeds the 20,000 character budget.'); }
+		if (fnDef.length > MAX_PLAYWRIGHT_CODE_CHARS) { throw new Error(`Playwright code exceeds the ${MAX_PLAYWRIGHT_CODE_CHARS.toLocaleString()} character budget.`); }
 		const vm = await import('vm');
-		return vm.compileFunction(`return (${fnDef})(page, ...args)`, ['page', 'args'], { parsingContext: vm.createContext() }) as (page: Page, args: unknown[]) => unknown;
+		const script = new vm.Script(`(${fnDef})(page, ...args)`);
+		return (page: Page, args: unknown[]) => script.runInNewContext({ page, args }, { timeout: BROWSER_SAFETY_LIMITS.playwrightCodeTimeoutMs });
 	}
 
 	private _guardAction(fingerprint: string, navigation = false): void {
+		if (Date.now() - this._createdAt > MAX_SESSION_LIFETIME_MS) { throw new Error('Integrated browser session exceeded its 30 minute lifetime. Start a fresh session.'); }
 		this._actionCount++;
 		if (this._actionCount > MAX_SESSION_ACTIONS) { throw new Error(`Integrated browser action budget exceeded (${MAX_SESSION_ACTIONS}).`); }
-		if (navigation && ++this._navigationCount > MAX_SESSION_NAVIGATIONS) { throw new Error(`Integrated browser navigation budget exceeded (${MAX_SESSION_NAVIGATIONS}).`); }
+		if (this._actionCount === SOFT_SESSION_ACTION_LIMIT) { throw new Error(`Integrated browser action budget reached ${SOFT_SESSION_ACTION_LIMIT}. Summarize state and retry only if further browsing is necessary.`); }
+		if (navigation) {
+			this._navigationCount++;
+			if (this._navigationCount > MAX_SESSION_NAVIGATIONS) { throw new Error(`Integrated browser navigation budget exceeded (${MAX_SESSION_NAVIGATIONS}).`); }
+			if (this._navigationCount === SOFT_SESSION_NAVIGATION_LIMIT) { throw new Error(`Integrated browser navigation budget reached ${SOFT_SESSION_NAVIGATION_LIMIT}. Reassess before navigating again.`); }
+		}
 		if (fingerprint === this._lastAction) { this._identicalActionCount++; } else { this._lastAction = fingerprint; this._identicalActionCount = 1; }
-		if (this._identicalActionCount > MAX_IDENTICAL_ACTIONS) { throw new Error(`Integrated browser anti-loop policy blocked the same action after ${MAX_IDENTICAL_ACTIONS} repetitions.`); }
+		if (this._identicalActionCount >= MAX_IDENTICAL_ACTIONS) { throw new Error(`Integrated browser loop blocked after ${MAX_IDENTICAL_ACTIONS} identical actions.`); }
+		if (this._identicalActionCount === WARN_IDENTICAL_ACTIONS) { throw new Error('Repeated integrated browser action detected. Reinspect page state before retrying.'); }
 	}
 
 	// --- Private: page matching (view ↔ page pairing) ---
@@ -762,6 +821,10 @@ class PlaywrightSession extends Disposable {
 		if (queued) {
 			return queued.viewId.p;
 		}
+		if (this._viewIdToPage.size + this._pageQueue.length >= MAX_SESSION_TABS) {
+			void page.close().catch(() => undefined);
+			return Promise.reject(new Error(`Integrated browser tab budget exceeded (${MAX_SESSION_TABS}).`));
+		}
 
 		this._onContextAdded(page.context());
 		page.once('close', () => this._onPageRemoved(page));
@@ -796,7 +859,7 @@ class PlaywrightSession extends Disposable {
 		}
 		this._watchedContexts.add(context);
 		this._startTracing(context);
-		context.on('page', (page: Page) => this._onPageAdded(page));
+		context.on('page', (page: Page) => void this._onPageAdded(page).catch(error => this.logService.warn(`[PlaywrightSession] Rejected browser page: ${error instanceof Error ? error.message : String(error)}`)));
 		context.on('close', () => { this._watchedContexts.delete(context); this._tracePaths.delete(context); });
 		for (const page of context.pages()) {
 			this._onPageAdded(page);
@@ -877,6 +940,22 @@ function isNavigationTimeoutError(error: unknown): boolean {
 	return error.name === 'TimeoutError'
 		|| /Timeout \d+ms exceeded/.test(error.message)
 		|| /navigation timeout/i.test(error.message);
+}
+
+function boundInvokeFunctionResult(value: IInvokeFunctionResult): IInvokeFunctionResult {
+	let serialized: string;
+	try { serialized = JSON.stringify(value.result) ?? String(value.result); } catch { serialized = String(value.result); }
+	const result = serialized.length > MAX_PLAYWRIGHT_RESULT_CHARS
+		? { truncated: true, preview: serialized.slice(0, MAX_PLAYWRIGHT_RESULT_CHARS - 100) }
+		: value.result;
+	return {
+		...value,
+		result,
+		error: value.error?.slice(0, MAX_PLAYWRIGHT_RESULT_CHARS),
+		summary: value.summary.length > MAX_PLAYWRIGHT_RESULT_CHARS
+			? `${value.summary.slice(0, MAX_PLAYWRIGHT_RESULT_CHARS - 80)}\n[summary truncated]`
+			: value.summary,
+	};
 }
 
 /**

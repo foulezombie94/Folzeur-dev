@@ -8,6 +8,7 @@ import { Codicon } from '../../../../../base/common/codicons.js';
 import { MarkdownString } from '../../../../../base/common/htmlContent.js';
 import { localize } from '../../../../../nls.js';
 import { IPlaywrightService } from '../../../../../platform/browserView/common/playwrightService.js';
+import { BROWSER_SAFETY_LIMITS } from '../../../../../platform/browserView/common/browserPolicy.js';
 import { ToolDataSource, type CountTokensCallback, type IPreparedToolInvocation, type IToolData, type IToolImpl, type IToolInvocation, type IToolInvocationPreparationContext, type IToolResult, type ToolProgress } from '../../../chat/common/tools/languageModelToolsService.js';
 import { errorResult, getSessionId, invokeFunctionResultToToolResult } from './browserToolHelpers.js';
 import { BrowserChatToolReferenceName } from '../../../../../platform/browserView/common/browserChatToolReferenceNames.js';
@@ -30,7 +31,7 @@ export const RunPlaywrightCodeToolData: IToolData = {
 			},
 			code: {
 				type: 'string',
-				maxLength: 20_000,
+				maxLength: BROWSER_SAFETY_LIMITS.maxPlaywrightCodeChars,
 				description: `The Playwright code to execute. The code must be concise, serve one clear purpose, and be self-contained. You **must not** directly access \`document\` or \`window\` using this tool. You must access it via the provided \`page\` object, e.g. "return page.evaluate(() => document.title)". Omit this when resuming a deferred execution via deferredResultId.`
 			},
 			deferredResultId: {
@@ -40,7 +41,7 @@ export const RunPlaywrightCodeToolData: IToolData = {
 			timeoutMs: {
 				type: 'number',
 				minimum: 100,
-				maximum: 30_000,
+				maximum: BROWSER_SAFETY_LIMITS.playwrightCodeTimeoutMs * 2,
 				description: `Maximum time in milliseconds to wait for the code to complete. Defaults to 5000 (5 seconds).`
 			},
 		},
@@ -95,7 +96,7 @@ export class RunPlaywrightCodeTool implements IToolImpl {
 		// Resume waiting for a deferred execution
 		if (params.deferredResultId) {
 			try {
-				const result = await this.playwrightService.waitForDeferredResult(sessionId, params.deferredResultId, params.timeoutMs ?? 5_000);
+				const result = await this.playwrightService.waitForDeferredResult(sessionId, params.deferredResultId, params.timeoutMs ?? BROWSER_SAFETY_LIMITS.playwrightCodeTimeoutMs);
 				return invokeFunctionResultToToolResult(result);
 			} catch (e) {
 				return errorResult(e instanceof Error ? e.message : String(e));
@@ -108,7 +109,7 @@ export class RunPlaywrightCodeTool implements IToolImpl {
 
 		let result;
 		try {
-			result = await this.playwrightService.invokeFunction(sessionId, params.pageId, `async (page) => { ${params.code} }`, undefined, params.timeoutMs ?? 5_000, true);
+			result = await this.playwrightService.invokeFunction(sessionId, params.pageId, `async (page) => { ${params.code} }`, undefined, params.timeoutMs ?? BROWSER_SAFETY_LIMITS.playwrightCodeTimeoutMs, true);
 		} catch (e) {
 			const message = e instanceof Error ? e.message : String(e);
 			return errorResult(`Code execution failed: ${message}`);

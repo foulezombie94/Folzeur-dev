@@ -92,6 +92,9 @@ export interface IPlaywrightService {
 	/** Return trusted browser metadata without exposing page-controlled DOM text. */
 	getPageMetadata(sessionId: string, pageId: string): Promise<{ url: string; title: string }>;
 
+	/** Consume one screenshot from the conversation-scoped screenshot budget. */
+	recordScreenshot(sessionId: string, pageId: string): Promise<void>;
+
 	/**
 	 * Run a function with access to a Playwright page and return its raw result, or throw an error.
 	 * The first function argument is always the Playwright `page` object, and additional arguments can be passed after.

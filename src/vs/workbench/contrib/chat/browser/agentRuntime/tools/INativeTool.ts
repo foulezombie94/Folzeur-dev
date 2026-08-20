@@ -43,5 +43,10 @@ export interface INativeTool {
 	readonly inputSchema: NativeToolSchema;
 	setIgnoreGuard?(guard: WorkspaceIgnoreGuard): void;
 
-	execute(parameters: Record<string, unknown>, cwd: string, progress?: (part: IChatProgress) => void, token?: CancellationToken): Promise<unknown>;
+	execute(parameters: Record<string, unknown>, cwd: string, progress?: (part: IChatProgress) => void, token?: CancellationToken, context?: NativeToolExecutionContext): Promise<unknown>;
+}
+
+export interface NativeToolExecutionContext {
+	/** Stable identity of the conversation invoking the tool. Never supplied by model parameters. */
+	readonly conversationId: string;
 }

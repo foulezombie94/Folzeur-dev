@@ -11,7 +11,8 @@ import { localize } from '../../../../../nls.js';
 import { IPlaywrightService } from '../../../../../platform/browserView/common/playwrightService.js';
 import { ToolDataSource, type CountTokensCallback, type IPreparedToolInvocation, type IToolData, type IToolImpl, type IToolInvocation, type IToolInvocationPreparationContext, type IToolResult, type ToolProgress } from '../../../chat/common/tools/languageModelToolsService.js';
 import { IAgentNetworkFilterService } from '../../../../../platform/networkFilter/common/networkFilterService.js';
-import { createBrowserPageLink, errorResult, getBrowserPolicyConfirmation, getSessionId, playwrightInvoke, remoteUrlRewriteNotice, rewriteRemoteLocalhostUrl } from './browserToolHelpers.js';
+import { createBrowserPageLink, errorResult, getBrowserPolicyConfirmation, getSessionId, playwrightInvokeWithTimeout, remoteUrlRewriteNotice, rewriteRemoteLocalhostUrl } from './browserToolHelpers.js';
+import { BROWSER_SAFETY_LIMITS } from '../../../../../platform/browserView/common/browserPolicy.js';
 import { BrowserChatToolReferenceName } from '../../../../../platform/browserView/common/browserChatToolReferenceNames.js';
 import { IBrowserViewWorkbenchService } from '../../common/browserView.js';
 import { IRemoteExplorerService } from '../../../../services/remote/common/remoteExplorerService.js';
@@ -123,17 +124,17 @@ export class NavigateBrowserTool implements IToolImpl {
 
 		switch (params.type) {
 			case 'reload':
-				return playwrightInvoke(this.playwrightService, sessionId, params.pageId, (page) => page.reload({ waitUntil: 'domcontentloaded' }));
+				return playwrightInvokeWithTimeout(this.playwrightService, sessionId, params.pageId, BROWSER_SAFETY_LIMITS.navigationTimeoutMs, (page) => page.reload({ waitUntil: 'domcontentloaded' }));
 			case 'back':
-				return playwrightInvoke(this.playwrightService, sessionId, params.pageId, (page) => page.goBack({ waitUntil: 'domcontentloaded' }));
+				return playwrightInvokeWithTimeout(this.playwrightService, sessionId, params.pageId, BROWSER_SAFETY_LIMITS.navigationTimeoutMs, (page) => page.goBack({ waitUntil: 'domcontentloaded' }));
 			case 'forward':
-				return playwrightInvoke(this.playwrightService, sessionId, params.pageId, (page) => page.goForward({ waitUntil: 'domcontentloaded' }));
+				return playwrightInvokeWithTimeout(this.playwrightService, sessionId, params.pageId, BROWSER_SAFETY_LIMITS.navigationTimeoutMs, (page) => page.goForward({ waitUntil: 'domcontentloaded' }));
 			default: {
 				// In a remote workspace without the remote proxy, the integrated
 				// browser runs locally and cannot reach the remote's localhost directly.
 				// Rewrite to the forwarded local address (if any) so the page can be reached.
 				const rewrite = rewriteRemoteLocalhostUrl(params.url!, this.browserViewService, this.remoteExplorerService);
-				const result = await playwrightInvoke(this.playwrightService, sessionId, params.pageId, (page, target) => {
+				const result = await playwrightInvokeWithTimeout(this.playwrightService, sessionId, params.pageId, BROWSER_SAFETY_LIMITS.navigationTimeoutMs, (page, target) => {
 					return page.goto(target, { waitUntil: 'domcontentloaded' });
 				}, rewrite.url);
 				return rewrite.rewritten

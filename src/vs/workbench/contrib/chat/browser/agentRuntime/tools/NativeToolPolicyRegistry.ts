@@ -80,11 +80,11 @@ export function resolveNativeToolPolicy(name: string, parameters: Readonly<Recor
 	}
 	if (name === 'browser_action') {
 		const action = String(parameters.action ?? '');
-		const browserDecision = evaluateBrowserPolicy({ action, url: typeof parameters.url === 'string' ? parameters.url : undefined, selector: typeof parameters.selector === 'string' ? parameters.selector : undefined, text: typeof parameters.text === 'string' ? parameters.text : undefined });
-		if (action === 'get_storage_value') { return { effect: 'external_read', risk: 'caution', parallelSafe: true, coalescible: false, requiresConfirmation: true, targetKeys: ['sessionId', 'action', 'storageArea', 'storageKey'], metric: 'none' }; }
+		const browserDecision = evaluateBrowserPolicy({ action, url: typeof parameters.url === 'string' ? parameters.url : undefined, selector: typeof parameters.selector === 'string' ? parameters.selector : undefined, text: typeof parameters.text === 'string' ? parameters.text : undefined, storageKey: typeof parameters.storageKey === 'string' ? parameters.storageKey : undefined });
+		if (action === 'get_storage_value') { return { effect: 'external_read', risk: browserDecision.risk === 'dangerous' ? 'destructive' : 'safe', parallelSafe: true, coalescible: false, requiresConfirmation: browserDecision.requiresConfirmation, targetKeys: ['sessionId', 'action', 'storageArea', 'storageKey'], metric: 'none' }; }
 		if (['screenshot', 'get_console_logs', 'get_network_logs', 'get_text', 'get_title', 'inspect_dom', 'accessibility_snapshot', 'get_storage', 'list_storage_keys', 'wait_for', 'assert'].includes(action)) { return { ...READ(['sessionId', 'action', 'selector', 'assertion', 'expected']), effect: 'external_read', requiresConfirmation: browserDecision.requiresConfirmation }; }
 		if (action === 'close') { return { ...CONTROL(['sessionId', 'action']), effect: 'control', risk: 'safe', requiresConfirmation: false }; }
-		return { ...UNKNOWN_POLICY, effect: action === 'launch' ? 'external_read' : 'external_interaction', requiresConfirmation: browserDecision.requiresConfirmation, risk: browserDecision.access === 'sensitive' ? 'destructive' : 'caution', targetKeys: ['sessionId', 'action', 'url', 'selector'] };
+		return { ...UNKNOWN_POLICY, effect: action === 'launch' ? 'external_read' : 'external_interaction', requiresConfirmation: browserDecision.requiresConfirmation, risk: browserDecision.risk === 'dangerous' ? 'destructive' : 'caution', targetKeys: ['sessionId', 'action', 'url', 'selector'] };
 	}
 	if (name === 'manage_terminal') {
 		return String(parameters.action ?? '') === 'get_output'

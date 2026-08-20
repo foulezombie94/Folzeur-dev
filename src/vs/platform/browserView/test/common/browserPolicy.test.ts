@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../base/test/common/utils.js';
-import { classifyBrowserAccess, classifyBrowserOrigin, evaluateBrowserPolicy } from '../../common/browserPolicy.js';
+import { BROWSER_SAFETY_LIMITS, classifyBrowserAccess, classifyBrowserOrigin, classifyBrowserRisk, evaluateBrowserPolicy } from '../../common/browserPolicy.js';
 
 suite('Browser action policy', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
@@ -18,13 +18,36 @@ suite('Browser action policy', () => {
 		assert.strictEqual(classifyBrowserAccess({ action: 'run_playwright_code' }), 'sensitive');
 	});
 
+	test('uses commercial soft and hard budgets', () => {
+		assert.deepStrictEqual({
+			actions: [BROWSER_SAFETY_LIMITS.softActions, BROWSER_SAFETY_LIMITS.hardActions],
+			navigations: [BROWSER_SAFETY_LIMITS.softNavigations, BROWSER_SAFETY_LIMITS.hardNavigations],
+			repeated: [BROWSER_SAFETY_LIMITS.warnRepeatedActions, BROWSER_SAFETY_LIMITS.hardRepeatedActions],
+			timeouts: [BROWSER_SAFETY_LIMITS.clickTimeoutMs, BROWSER_SAFETY_LIMITS.actionTimeoutMs, BROWSER_SAFETY_LIMITS.navigationTimeoutMs, BROWSER_SAFETY_LIMITS.playwrightCodeTimeoutMs],
+			tabs: BROWSER_SAFETY_LIMITS.maxTabs,
+			screenshots: BROWSER_SAFETY_LIMITS.maxScreenshots,
+		}, { actions: [150, 250], navigations: [30, 50], repeated: [3, 5], timeouts: [10_000, 15_000, 30_000, 5_000], tabs: 10, screenshots: 75 });
+	});
+
 	test('never auto-confirms sensitive actions and blocks unsupported schemes', () => {
 		const sensitive = evaluateBrowserPolicy({ action: 'click_element', selector: 'button.delete', url: 'https://example.test' });
 		assert.strictEqual(sensitive.allowed, true);
 		assert.strictEqual(sensitive.requiresConfirmation, true);
 		assert.strictEqual(sensitive.access, 'sensitive');
+		assert.strictEqual(sensitive.risk, 'dangerous');
 		assert.strictEqual(classifyBrowserOrigin('javascript:alert(1)', false, false), 'blocked');
+		assert.strictEqual(classifyBrowserOrigin('file:///tmp/secret', false, true), 'blocked');
+		assert.strictEqual(classifyBrowserOrigin('chrome://settings', false, true), 'blocked');
 		assert.strictEqual(evaluateBrowserPolicy({ action: 'read_page', url: 'javascript:alert(1)' }).allowed, false);
+	});
+
+	test('keeps consequential actions gated in every approval mode', () => {
+		for (const approvalMode of ['manual', 'trusted', 'auto'] as const) {
+			assert.strictEqual(evaluateBrowserPolicy({ action: 'click_element', selector: 'button:has-text("Delete account")', url: 'https://example.test', approvalMode }).requiresConfirmation, true);
+			assert.strictEqual(evaluateBrowserPolicy({ action: 'run_playwright_code', url: 'http://localhost:3000', ownedLocalOrigin: true, approvalMode }).requiresConfirmation, true);
+		}
+		assert.strictEqual(classifyBrowserRisk({ action: 'get_storage_value', storageKey: 'theme' }), 'safe');
+		assert.strictEqual(classifyBrowserRisk({ action: 'get_storage_value', storageKey: 'access_token' }), 'dangerous');
 	});
 
 	test('allows owned local verification interactions without remote approval', () => {

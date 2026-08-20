@@ -125,6 +125,7 @@ export class NativeTask extends Disposable {
 	private activeToken: CancellationToken = CancellationToken.None;
 	private activeCwd = '';
 	private activeRunId = '';
+	private activeConversationId = '';
 	private readonly repeatedToolCalls = new Map<string, number>();
 	private readonly sessionPermissions = new Map<string, number>();
 	private readonly baselineDiagnosticKeys = new Set<string>();
@@ -365,7 +366,7 @@ Never call tools during classification. Do not classify a request as direct if a
 					}
 					try {
 						this.toolRuntime.validate(tool, call.parameters);
-						const raw = await this.toolRuntime.execute(tool, call.parameters, this.activeCwd, undefined, token);
+						const raw = await this.toolRuntime.execute(tool, call.parameters, this.activeCwd, undefined, token, { conversationId: this.activeConversationId });
 						const text = (typeof raw === 'string' ? raw : JSON.stringify(raw, null, 2)).slice(0, 24_000);
 						results.push({ type: 'tool_result', toolCallId: call.toolCallId, value: [{ type: 'text', value: text }] });
 					} catch (error) {
@@ -785,6 +786,7 @@ Never call tools during classification. Do not classify a request as direct if a
 		this.activeToken = token;
 		this.activeCwd = cwd;
 		this.activeRunId = generateUuid();
+		this.activeConversationId = sessionId;
 		await this.largeToolResults.setRunScope(URI.file(cwd), this.activeRunId);
 		this.metrics = new AgentRunMetrics(generateUuid());
 		this.activeGoal = prompt;
@@ -1461,7 +1463,7 @@ Never call tools during classification. Do not classify a request as direct if a
 					: URI.file(call.parameters.filePath);
 				canonicalPrimaryPath = safeUri.fsPath;
 				await this.snapshots.capture(safeUri.fsPath);
-				const rawResult = await this.toolRuntime.execute(tool, call.parameters, cwd, progress, this.activeToken);
+				const rawResult = await this.toolRuntime.execute(tool, call.parameters, cwd, progress, this.activeToken, { conversationId: this.activeConversationId });
 				const resultRecord = rawResult && typeof rawResult === 'object' ? rawResult as Record<string, unknown> : undefined;
 				const success = resultRecord?.success !== false;
 				if (success && await this.recordFileChange(safeUri.fsPath, call.toolCallId)) {
@@ -1511,7 +1513,7 @@ Never call tools during classification. Do not classify a request as direct if a
 			if (isTerminalCall) { this.activeTerminalToolCallId = call.toolCallId; }
 			let result: unknown;
 			try {
-				result = await this.toolRuntime.execute(tool, call.parameters, cwd, progress, this.activeToken);
+				result = await this.toolRuntime.execute(tool, call.parameters, cwd, progress, this.activeToken, { conversationId: this.activeConversationId });
 			} finally {
 				if (this.activeTerminalToolCallId === call.toolCallId) { this.activeTerminalToolCallId = undefined; }
 			}
