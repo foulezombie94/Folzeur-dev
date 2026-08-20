@@ -11,7 +11,7 @@ import { localize } from '../../../../../nls.js';
 import { IPlaywrightService } from '../../../../../platform/browserView/common/playwrightService.js';
 import { ToolDataSource, type CountTokensCallback, type IPreparedToolInvocation, type IToolData, type IToolImpl, type IToolInvocation, type IToolInvocationPreparationContext, type IToolResult, type ToolProgress } from '../../../chat/common/tools/languageModelToolsService.js';
 import { IAgentNetworkFilterService } from '../../../../../platform/networkFilter/common/networkFilterService.js';
-import { createBrowserPageLink, errorResult, getSessionId, playwrightInvoke, remoteUrlRewriteNotice, rewriteRemoteLocalhostUrl } from './browserToolHelpers.js';
+import { createBrowserPageLink, errorResult, getBrowserPolicyConfirmation, getSessionId, playwrightInvoke, remoteUrlRewriteNotice, rewriteRemoteLocalhostUrl } from './browserToolHelpers.js';
 import { BrowserChatToolReferenceName } from '../../../../../platform/browserView/common/browserChatToolReferenceNames.js';
 import { IBrowserViewWorkbenchService } from '../../common/browserView.js';
 import { IRemoteExplorerService } from '../../../../services/remote/common/remoteExplorerService.js';
@@ -63,21 +63,25 @@ export class NavigateBrowserTool implements IToolImpl {
 	async prepareToolInvocation(context: IToolInvocationPreparationContext, _token: CancellationToken): Promise<IPreparedToolInvocation | undefined> {
 		const params = context.parameters as INavigateBrowserToolParams;
 		const link = createBrowserPageLink(params.pageId);
+		const confirmationMessages = await getBrowserPolicyConfirmation(this.playwrightService, context, 'navigate_page', { pageId: params.pageId });
 		switch (params.type) {
 			case 'reload':
 				return {
+					confirmationMessages,
 					invocationMessage: new MarkdownString(localize('browser.reload.invocation', "Reloading {0}", link)),
 					pastTenseMessage: new MarkdownString(localize('browser.reload.past', "Reloaded {0}", link)),
 					icon: Codicon.refresh,
 				};
 			case 'back':
 				return {
+					confirmationMessages,
 					invocationMessage: new MarkdownString(localize('browser.goBack.invocation', "Navigating backward in {0}", link)),
 					pastTenseMessage: new MarkdownString(localize('browser.goBack.past', "Navigated backward in {0}", link)),
 					icon: Codicon.arrowLeft,
 				};
 			case 'forward':
 				return {
+					confirmationMessages,
 					invocationMessage: new MarkdownString(localize('browser.goForward.invocation', "Navigating forward in {0}", link)),
 					pastTenseMessage: new MarkdownString(localize('browser.goForward.past', "Navigated forward in {0}", link)),
 					icon: Codicon.arrowRight,

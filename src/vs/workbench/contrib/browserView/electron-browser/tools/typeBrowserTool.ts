@@ -12,7 +12,7 @@ import {
 import { localize } from '../../../../../nls.js';
 import { IPlaywrightService } from '../../../../../platform/browserView/common/playwrightService.js';
 import { ToolDataSource, type CountTokensCallback, type IPreparedToolInvocation, type IToolData, type IToolImpl, type IToolInvocation, type IToolInvocationPreparationContext, type IToolResult, type ToolProgress } from '../../../chat/common/tools/languageModelToolsService.js';
-import { createBrowserPageLink, errorResult, getSessionId, playwrightInvoke } from './browserToolHelpers.js';
+import { createBrowserPageLink, errorResult, getBrowserPolicyConfirmation, getSessionId, playwrightInvoke } from './browserToolHelpers.js';
 import { BrowserChatToolReferenceName } from '../../../../../platform/browserView/common/browserChatToolReferenceNames.js';
 import { OpenPageToolId } from './openBrowserTool.js';
 
@@ -79,17 +79,20 @@ export class TypeBrowserTool implements IToolImpl {
 		const params = context.parameters as ITypeBrowserToolParams;
 		const link = createBrowserPageLink(params.pageId);
 		const hasTarget = params.ref || params.selector;
+		const confirmationMessages = await getBrowserPolicyConfirmation(this.playwrightService, context, 'type_in_page', { pageId: params.pageId, selector: `${params.selector ?? params.ref ?? ''} ${params.element ?? ''}`, text: params.text });
 
 		if (params.key) {
 			const key = escapeMarkdownSyntaxTokens(params.key);
 			if (hasTarget && params.element) {
 				const element = escapeMarkdownSyntaxTokens(params.element);
 				return {
+					confirmationMessages,
 					invocationMessage: new MarkdownString(localize('browser.pressKey.invocation.element', "Pressing key `{0}` in {1} in {2}", key, element, link)),
 					pastTenseMessage: new MarkdownString(localize('browser.pressKey.past.element', "Pressed key `{0}` in {1} in {2}", key, element, link)),
 				};
 			}
 			return {
+				confirmationMessages,
 				invocationMessage: new MarkdownString(localize('browser.pressKey.invocation', "Pressing key `{0}` in {1}", key, link)),
 				pastTenseMessage: new MarkdownString(localize('browser.pressKey.past', "Pressed key `{0}` in {1}", key, link)),
 			};
@@ -98,6 +101,7 @@ export class TypeBrowserTool implements IToolImpl {
 		if (hasTarget && params.element) {
 			const element = escapeMarkdownSyntaxTokens(params.element);
 			return {
+				confirmationMessages,
 				invocationMessage: params.submit
 					? new MarkdownString(localize('browser.typeAndSubmit.invocation.element', "Typing text in {0} in {1} and pressing Enter", element, link))
 					: new MarkdownString(localize('browser.type.invocation.element', "Typing text in {0} in {1}", element, link)),
@@ -107,6 +111,7 @@ export class TypeBrowserTool implements IToolImpl {
 			};
 		}
 		return {
+			confirmationMessages,
 			invocationMessage: params.submit
 				? new MarkdownString(localize('browser.typeAndSubmit.invocation', "Typing text in {0} and pressing Enter", link))
 				: new MarkdownString(localize('browser.type.invocation', "Typing text in {0}", link)),

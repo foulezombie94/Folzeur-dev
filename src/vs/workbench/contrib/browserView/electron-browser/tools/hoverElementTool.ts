@@ -9,7 +9,7 @@ import { escapeMarkdownSyntaxTokens, MarkdownString } from '../../../../../base/
 import { localize } from '../../../../../nls.js';
 import { IPlaywrightService } from '../../../../../platform/browserView/common/playwrightService.js';
 import { ToolDataSource, type CountTokensCallback, type IPreparedToolInvocation, type IToolData, type IToolImpl, type IToolInvocation, type IToolInvocationPreparationContext, type IToolResult, type ToolProgress } from '../../../chat/common/tools/languageModelToolsService.js';
-import { createBrowserPageLink, DEFAULT_ELEMENT_LABEL, errorResult, getSessionId, playwrightInvoke } from './browserToolHelpers.js';
+import { createBrowserPageLink, DEFAULT_ELEMENT_LABEL, errorResult, getBrowserPolicyConfirmation, getSessionId, playwrightInvoke } from './browserToolHelpers.js';
 import { BrowserChatToolReferenceName } from '../../../../../platform/browserView/common/browserChatToolReferenceNames.js';
 import { OpenPageToolId } from './openBrowserTool.js';
 
@@ -63,6 +63,7 @@ export class HoverElementTool implements IToolImpl {
 		const link = createBrowserPageLink(params.pageId);
 		const element = escapeMarkdownSyntaxTokens(params.element ?? DEFAULT_ELEMENT_LABEL);
 		return {
+			confirmationMessages: await getBrowserPolicyConfirmation(this.playwrightService, _context, 'hover_element', { pageId: params.pageId, selector: params.selector ?? params.ref }),
 			invocationMessage: new MarkdownString(localize('browser.hover.invocation', "Hovering over {0} in {1}", element, link)),
 			pastTenseMessage: new MarkdownString(localize('browser.hover.past', "Hovered over {0} in {1}", element, link)),
 		};

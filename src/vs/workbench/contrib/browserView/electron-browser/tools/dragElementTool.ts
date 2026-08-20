@@ -9,7 +9,7 @@ import { escapeMarkdownSyntaxTokens, MarkdownString } from '../../../../../base/
 import { localize } from '../../../../../nls.js';
 import { IPlaywrightService } from '../../../../../platform/browserView/common/playwrightService.js';
 import { ToolDataSource, type CountTokensCallback, type IPreparedToolInvocation, type IToolData, type IToolImpl, type IToolInvocation, type IToolInvocationPreparationContext, type IToolResult, type ToolProgress } from '../../../chat/common/tools/languageModelToolsService.js';
-import { createBrowserPageLink, DEFAULT_ELEMENT_LABEL, errorResult, getSessionId, playwrightInvoke } from './browserToolHelpers.js';
+import { createBrowserPageLink, DEFAULT_ELEMENT_LABEL, errorResult, getBrowserPolicyConfirmation, getSessionId, playwrightInvoke } from './browserToolHelpers.js';
 import { BrowserChatToolReferenceName } from '../../../../../platform/browserView/common/browserChatToolReferenceNames.js';
 import { OpenPageToolId } from './openBrowserTool.js';
 
@@ -79,6 +79,7 @@ export class DragElementTool implements IToolImpl {
 		const fromElement = escapeMarkdownSyntaxTokens(params.fromElement ?? DEFAULT_ELEMENT_LABEL);
 		const toElement = escapeMarkdownSyntaxTokens(params.toElement ?? DEFAULT_ELEMENT_LABEL);
 		return {
+			confirmationMessages: await getBrowserPolicyConfirmation(this.playwrightService, _context, 'drag_element', { pageId: params.pageId, selector: `${params.fromSelector ?? params.fromRef ?? ''} ${params.toSelector ?? params.toRef ?? ''}` }),
 			invocationMessage: new MarkdownString(localize('browser.drag.invocation', "Dragging {0} to {1} in {2}", fromElement, toElement, link)),
 			pastTenseMessage: new MarkdownString(localize('browser.drag.past', "Dragged {0} to {1} in {2}", fromElement, toElement, link)),
 		};

@@ -15,7 +15,7 @@ import { IChatContextService } from '../../../chat/browser/contextContrib/chatCo
 import { IChatService } from '../../../chat/common/chatService/chatService.js';
 import { ILanguageModelToolsService, ToolDataSource, ToolSet } from '../../../chat/common/tools/languageModelToolsService.js';
 import { IBrowserViewWorkbenchService } from '../../common/browserView.js';
-import { getBrowserPagesContext } from './browserToolHelpers.js';
+import { getBrowserPagesContext, releaseBrowserPageClaims } from './browserToolHelpers.js';
 import { ClickBrowserTool, ClickBrowserToolData } from './clickBrowserTool.js';
 import { DragElementTool, DragElementToolData } from './dragElementTool.js';
 import { HandleDialogBrowserTool, HandleDialogBrowserToolData } from './handleDialogBrowserTool.js';
@@ -71,6 +71,7 @@ class BrowserChatAgentToolsContribution extends Disposable implements IWorkbench
 		// Dispose Playwright sessions when the corresponding chat session ends.
 		this._register(this.chatService.onDidDisposeSession(e => {
 			for (const resource of e.sessionResources) {
+				releaseBrowserPageClaims(resource.toString());
 				void this.playwrightService.disposeSession(resource.toString()).catch(() => { });
 			}
 		}));

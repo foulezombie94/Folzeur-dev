@@ -46,6 +46,10 @@ export class NativeLaunchLocalAppTool implements INativeTool {
 		}
 		const projectPath = parameters.path?.trim() || cwd;
 		const root = await this.canonicalizeRoot(URI.file(projectPath));
+		const existingUrl = this.localAppServerRegistry.getKnownUrl(root);
+		if (existingUrl) {
+			return `Reusing the already running local application at ${existingUrl}`;
+		}
 		const target = await this.resolveLaunchTarget(root);
 		if (target.kind === 'static') {
 			const url = await this.localAppServerRegistry.launch(root, target.entryFile, token);
@@ -66,19 +70,19 @@ export class NativeLaunchLocalAppTool implements INativeTool {
 			const manifest = this.parsePackageManifest((await this.fileService.readFile(packageUri)).value.toString());
 			const script = ['dev', 'start', 'serve', 'preview'].find(candidate => typeof manifest.scripts?.[candidate] === 'string');
 			if (script) {
-				if (await this.fileService.exists(URI.joinPath(root, 'pnpm-lock.yaml'))) {return { kind: 'command', command: `pnpm run ${script}` };}
-				if (await this.fileService.exists(URI.joinPath(root, 'yarn.lock'))) {return { kind: 'command', command: `yarn ${script}` };}
+				if (await this.fileService.exists(URI.joinPath(root, 'pnpm-lock.yaml'))) { return { kind: 'command', command: `pnpm run ${script}` }; }
+				if (await this.fileService.exists(URI.joinPath(root, 'yarn.lock'))) { return { kind: 'command', command: `yarn ${script}` }; }
 				return { kind: 'command', command: `npm run ${script}` };
 			}
 		}
 
-		if (await this.fileService.exists(URI.joinPath(root, 'Cargo.toml'))) {return { kind: 'command', command: 'cargo run' };}
-		if (await this.fileService.exists(URI.joinPath(root, 'go.mod'))) {return { kind: 'command', command: 'go run .' };}
+		if (await this.fileService.exists(URI.joinPath(root, 'Cargo.toml'))) { return { kind: 'command', command: 'cargo run' }; }
+		if (await this.fileService.exists(URI.joinPath(root, 'go.mod'))) { return { kind: 'command', command: 'go run .' }; }
 
 		const children = (await this.fileService.resolve(root)).children ?? [];
-		if (children.some(child => !child.isDirectory && child.name.endsWith('.csproj'))) {return { kind: 'command', command: 'dotnet run' };}
+		if (children.some(child => !child.isDirectory && child.name.endsWith('.csproj'))) { return { kind: 'command', command: 'dotnet run' }; }
 		const indexFile = children.find(child => !child.isDirectory && child.name.toLowerCase() === 'index.html');
-		if (indexFile) {return { kind: 'static', entryFile: indexFile.name };}
+		if (indexFile) { return { kind: 'static', entryFile: indexFile.name }; }
 		throw new Error('No supported application entrypoint was found. Inspect package.json, Cargo.toml, go.mod, pyproject.toml, or the project documentation before running a command.');
 	}
 
@@ -93,7 +97,7 @@ export class NativeLaunchLocalAppTool implements INativeTool {
 
 	private parsePackageManifest(content: string): PackageManifest {
 		const value: unknown = JSON.parse(content);
-		if (!value || typeof value !== 'object' || Array.isArray(value)) {throw new Error('package.json must contain a JSON object.');}
+		if (!value || typeof value !== 'object' || Array.isArray(value)) { throw new Error('package.json must contain a JSON object.'); }
 		const scripts = (value as { scripts?: unknown }).scripts;
 		return { scripts: scripts && typeof scripts === 'object' && !Array.isArray(scripts) ? scripts as Readonly<Record<string, unknown>> : undefined };
 	}

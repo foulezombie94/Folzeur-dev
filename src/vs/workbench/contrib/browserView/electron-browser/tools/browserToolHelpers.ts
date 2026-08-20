@@ -8,9 +8,10 @@ import { URI } from '../../../../../base/common/uri.js';
 import { localize } from '../../../../../nls.js';
 import { BrowserViewUri } from '../../../../../platform/browserView/common/browserViewUri.js';
 import { IInvokeFunctionResult, IPlaywrightService } from '../../../../../platform/browserView/common/playwrightService.js';
+import { evaluateBrowserPolicy } from '../../../../../platform/browserView/common/browserPolicy.js';
 import { IAgentNetworkFilterService } from '../../../../../platform/networkFilter/common/networkFilterService.js';
 import { IEditorService } from '../../../../services/editor/common/editorService.js';
-import { IToolInvocation, IToolResult } from '../../../chat/common/tools/languageModelToolsService.js';
+import { IToolInvocation, IToolResult, type IPreparedToolInvocation, type IToolInvocationPreparationContext } from '../../../chat/common/tools/languageModelToolsService.js';
 import { BrowserEditorInput } from '../../common/browserEditorInput.js';
 import { browserViewUrlMatches, BrowserViewSharingState, IBrowserViewWorkbenchService } from '../../common/browserView.js';
 import { IRemoteExplorerService } from '../../../../services/remote/common/remoteExplorerService.js';
@@ -22,12 +23,56 @@ import type { Page } from 'playwright-core';
 
 export const DEFAULT_ELEMENT_LABEL = localize('browser.element', 'element');
 
+/** Renderer-side mirror used only to keep model context conversation-scoped. */
+const claimedPagesBySession = new Map<string, Set<string>>();
+
+export function recordBrowserPageClaim(sessionId: string, pageId: string): void {
+	let pages = claimedPagesBySession.get(sessionId);
+	if (!pages) {
+		pages = new Set<string>();
+		claimedPagesBySession.set(sessionId, pages);
+	}
+	pages.add(pageId);
+}
+
+export function releaseBrowserPageClaims(sessionId: string): void {
+	claimedPagesBySession.delete(sessionId);
+}
+
+function isPageVisibleToSession(editor: BrowserEditorInput, sessionId: string | undefined): boolean {
+	if (!sessionId) { return false; }
+	return editor.model?.owner.sessionId === sessionId || claimedPagesBySession.get(sessionId)?.has(editor.id) === true;
+}
+
 /**
  * Extracts the session ID from a tool invocation context.
- * Falls back to a default string when no session context is available.
+ * Browser ownership must never fall back to a process-global identity.
  */
 export function getSessionId(invocation: IToolInvocation): string {
-	return invocation.context?.sessionResource?.toString() ?? '<default>';
+	const sessionId = invocation.context?.sessionResource?.toString();
+	if (!sessionId) { throw new Error('Integrated browser tools require a conversation session identity.'); }
+	return sessionId;
+}
+
+export async function getBrowserPolicyConfirmation(
+	playwrightService: IPlaywrightService,
+	context: IToolInvocationPreparationContext,
+	action: string,
+	input: { pageId: string; selector?: string; text?: string },
+): Promise<IPreparedToolInvocation['confirmationMessages'] | undefined> {
+	const sessionId = context.chatSessionResource?.toString();
+	if (!sessionId || !input.pageId) { return undefined; }
+	const metadata = await playwrightService.getPageMetadata(sessionId, input.pageId);
+	const decision = evaluateBrowserPolicy({ action, url: metadata.url, selector: input.selector, text: input.text });
+	if (!decision.allowed) { throw new Error(decision.reason); }
+	if (!decision.requiresConfirmation) { return undefined; }
+	return {
+		title: decision.access === 'sensitive'
+			? localize('browser.policy.sensitiveTitle', 'Confirm Sensitive Browser Action')
+			: localize('browser.policy.interactTitle', 'Allow Browser Interaction?'),
+		message: localize('browser.policy.confirmMessage', '{0}\n\nTarget: {1}', decision.reason, metadata.url),
+		allowAutoConfirm: decision.access !== 'sensitive',
+	};
 }
 
 export interface FormatBrowserEditorLinesOptions {
@@ -80,7 +125,8 @@ export function getBrowserPagesContext(
 		canPromptUser?: boolean;
 	},
 ): string | undefined {
-	const views = [...browserViewService.getContextualBrowserViews({ activeSessionId: options?.activeSessionId }).values()];
+	const views = [...browserViewService.getContextualBrowserViews({ activeSessionId: options?.activeSessionId }).values()]
+		.filter(view => isPageVisibleToSession(view, options?.activeSessionId));
 	const sharedViews = views.filter(view => view.model?.sharingState === BrowserViewSharingState.Shared);
 	const unsharedCount = views.length - sharedViews.length;
 
@@ -145,7 +191,7 @@ export async function playwrightInvoke<TArgs extends unknown[], TReturn>(
 	...args: TArgs
 ): Promise<IToolResult> {
 	try {
-		const result = await playwrightService.invokeFunction(sessionId, pageId, fn.toString(), args);
+		const result = await playwrightService.invokeFunction(sessionId, pageId, fn.toString(), args, 30_000);
 		return invokeFunctionResultToToolResult(result);
 	} catch (e) {
 		return errorResult(e instanceof Error ? e.message : String(e));
@@ -260,11 +306,15 @@ export function findExistingPagesByHost(
 		includeBlank?: boolean;
 		sharingState?: BrowserViewSharingState;
 		activeSessionId?: string;
+		includeUnowned?: boolean;
 	}
 ): BrowserEditorInput[] {
 	const results: BrowserEditorInput[] = [];
 	for (const editor of browserViewService.getContextualBrowserViews({ activeSessionId: options?.activeSessionId }).values()) {
 		if (!(editor instanceof BrowserEditorInput)) {
+			continue;
+		}
+		if (options?.activeSessionId && !options.includeUnowned && !isPageVisibleToSession(editor, options.activeSessionId)) {
 			continue;
 		}
 		if (options?.sharingState && editor.model?.sharingState !== options.sharingState) {

@@ -24,6 +24,9 @@ import { errorResult, getSessionId, playwrightInvokeRaw } from './browserToolHel
 import { BrowserChatToolReferenceName } from '../../../../../platform/browserView/common/browserChatToolReferenceNames.js';
 import { OpenPageToolId } from './openBrowserTool.js';
 import { ReadBrowserToolData } from './readBrowserTool.js';
+import { IFileService } from '../../../../../platform/files/common/files.js';
+import { URI } from '../../../../../base/common/uri.js';
+import { generateUuid } from '../../../../../base/common/uuid.js';
 
 export const ScreenshotBrowserToolData: IToolData = {
 	id: 'screenshot_page',
@@ -141,6 +144,7 @@ export class ScreenshotBrowserTool implements IToolImpl {
 		@IPlaywrightService private readonly playwrightService: IPlaywrightService,
 		@ITelemetryService private readonly telemetryService: ITelemetryService,
 		@IEditorGroupsService private readonly editorGroupsService: IEditorGroupsService,
+		@IFileService private readonly fileService: IFileService,
 	) { }
 
 	async prepareToolInvocation(_context: IToolInvocationPreparationContext, _token: CancellationToken): Promise<IPreparedToolInvocation | undefined> {
@@ -186,6 +190,15 @@ export class ScreenshotBrowserTool implements IToolImpl {
 			return locator.boundingBox();
 		}, selector, params.scrollIntoViewIfNeeded) || undefined;
 		const screenshot = await browserViewModel.captureScreenshot({ pageRect: bounds });
+		const artifactDirectory = await this.playwrightService.getSessionArtifactDirectory(sessionId);
+		let artifactPath: string | undefined;
+		if (artifactDirectory) {
+			const directory = URI.joinPath(URI.file(artifactDirectory), 'screenshots');
+			const resource = URI.joinPath(directory, `${generateUuid()}.jpg`);
+			await this.fileService.createFolder(directory);
+			await this.fileService.writeFile(resource, screenshot);
+			artifactPath = resource.fsPath;
+		}
 
 		const dimensions = readImageDimensions(screenshot);
 		const hostWindow = this.findBrowserViewHostWindow(browserViewModel);
@@ -216,6 +229,7 @@ export class ScreenshotBrowserTool implements IToolImpl {
 
 		return {
 			content: [
+				...(artifactPath ? [{ kind: 'text' as const, value: `Screenshot artifact: ${artifactPath}` }] : []),
 				{
 					kind: 'data',
 					value: {

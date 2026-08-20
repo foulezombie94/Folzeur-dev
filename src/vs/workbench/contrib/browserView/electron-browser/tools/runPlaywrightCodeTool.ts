@@ -30,6 +30,7 @@ export const RunPlaywrightCodeToolData: IToolData = {
 			},
 			code: {
 				type: 'string',
+				maxLength: 20_000,
 				description: `The Playwright code to execute. The code must be concise, serve one clear purpose, and be self-contained. You **must not** directly access \`document\` or \`window\` using this tool. You must access it via the provided \`page\` object, e.g. "return page.evaluate(() => document.title)". Omit this when resuming a deferred execution via deferredResultId.`
 			},
 			deferredResultId: {
@@ -38,6 +39,8 @@ export const RunPlaywrightCodeToolData: IToolData = {
 			},
 			timeoutMs: {
 				type: 'number',
+				minimum: 100,
+				maximum: 30_000,
 				description: `Maximum time in milliseconds to wait for the code to complete. Defaults to 5000 (5 seconds).`
 			},
 		},
@@ -76,7 +79,7 @@ export class RunPlaywrightCodeTool implements IToolImpl {
 				title: localize('browser.runCode.confirmTitle', 'Run Playwright Code?'),
 				message: new MarkdownString(`\`\`\`javascript\n${code.trim()}\n\`\`\``),
 				disclaimer: localize('browser.runCode.confirmDisclaimer', 'Make sure you trust the code before continuing.'),
-				allowAutoConfirm: true,
+				allowAutoConfirm: false,
 			}
 		};
 	}
@@ -105,7 +108,7 @@ export class RunPlaywrightCodeTool implements IToolImpl {
 
 		let result;
 		try {
-			result = await this.playwrightService.invokeFunction(sessionId, params.pageId, `async (page) => { ${params.code} }`, undefined, params.timeoutMs ?? 5_000);
+			result = await this.playwrightService.invokeFunction(sessionId, params.pageId, `async (page) => { ${params.code} }`, undefined, params.timeoutMs ?? 5_000, true);
 		} catch (e) {
 			const message = e instanceof Error ? e.message : String(e);
 			return errorResult(`Code execution failed: ${message}`);

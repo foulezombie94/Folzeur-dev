@@ -21,7 +21,8 @@ export interface IInvokeFunctionResult {
  *
  * The service maintains a separate Playwright browser instance per session. Callers
  * must pass a {@link sessionId} to every method so operations are routed to the
- * correct instance. Page tracking is shared globally across all sessions.
+ * correct instance. A browser view can be globally marked as shareable, but
+ * actual access is owned by a single conversation session.
  *
  * Pages must be explicitly tracked via {@link startTrackingPage} (or implicitly via
  * {@link openPage}) before they can be interacted with.
@@ -34,6 +35,10 @@ export interface IPlaywrightService {
 	 * The event value is the full list of currently tracked view IDs.
 	 */
 	readonly onDidChangeTrackedPages: Event<readonly string[]>;
+
+	/** Configure the workspace root used for persistent browser logs and traces. */
+	configureSessionArtifacts(sessionId: string, workspaceRoot: string): Promise<void>;
+	getSessionArtifactDirectory(sessionId: string): Promise<string | undefined>;
 
 	/**
 	 * Start tracking an existing browser view so that agent
@@ -58,6 +63,15 @@ export interface IPlaywrightService {
 	 */
 	getTrackedPages(): Promise<readonly string[]>;
 
+	/** Grant one conversation access to a user-shared browser view. */
+	claimPage(sessionId: string, viewId: string): Promise<void>;
+
+	/** Whether this conversation owns access to the given browser view. */
+	isPageOwned(sessionId: string, viewId: string): Promise<boolean>;
+
+	/** Return only the pages owned by this conversation. */
+	getOwnedPages(sessionId: string): Promise<readonly string[]>;
+
 	/**
 	 * Opens a new page in the browser and returns its associated view ID.
 	 * The page is automatically added to the tracked pages.
@@ -74,6 +88,9 @@ export interface IPlaywrightService {
 	 * @returns The summary of the page's current state.
 	 */
 	getSummary(sessionId: string, pageId: string): Promise<string>;
+
+	/** Return trusted browser metadata without exposing page-controlled DOM text. */
+	getPageMetadata(sessionId: string, pageId: string): Promise<{ url: string; title: string }>;
 
 	/**
 	 * Run a function with access to a Playwright page and return its raw result, or throw an error.
@@ -103,7 +120,7 @@ export interface IPlaywrightService {
 	 * @param timeoutMs Maximum time (in ms) to wait for the function to complete before deferring. When omitted the call awaits indefinitely.
 	 * @returns The result of the function execution, including a page summary and optionally a deferredResultId if the call did not complete.
 	 */
-	invokeFunction(sessionId: string, pageId: string, fnDef: string, args?: unknown[], timeoutMs?: number): Promise<IInvokeFunctionResult>;
+	invokeFunction(sessionId: string, pageId: string, fnDef: string, args?: unknown[], timeoutMs?: number, isArbitraryCode?: boolean): Promise<IInvokeFunctionResult>;
 
 	/**
 	 * Continue waiting for a previously deferred function invocation.

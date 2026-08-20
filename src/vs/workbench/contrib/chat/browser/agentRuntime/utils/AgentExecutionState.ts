@@ -29,6 +29,11 @@ export interface AgentExecutionSnapshot {
 	readonly lastFailure?: string;
 	readonly consecutiveFailures: number;
 	readonly finalDiffReviewRevision?: number;
+	readonly uiMutationRevision?: number;
+	readonly browserAssertionRevision?: number;
+	readonly browserConsoleRevision?: number;
+	readonly browserNetworkRevision?: number;
+	readonly browserScreenshotRevision?: number;
 	readonly unresolvedCriticalFailures: readonly string[];
 	readonly openTransactions: readonly string[];
 	readonly transitionHistory: readonly AgentStateTransition[];
@@ -54,6 +59,11 @@ export class AgentExecutionState {
 	private _lastFailure: string | undefined;
 	private _consecutiveFailures = 0;
 	private _finalDiffReviewRevision: number | undefined;
+	private _uiMutationRevision: number | undefined;
+	private _browserAssertionRevision: number | undefined;
+	private _browserConsoleRevision: number | undefined;
+	private _browserNetworkRevision: number | undefined;
+	private _browserScreenshotRevision: number | undefined;
 	private readonly _unresolvedCriticalFailures = new Set<string>();
 	private readonly _openTransactions = new Set<string>();
 
@@ -64,7 +74,7 @@ export class AgentExecutionState {
 	get verification(): AgentVerificationEvidence | undefined { return this._verification; }
 	get modifiedFiles(): readonly string[] { return [...this._modifiedFiles]; }
 	get debugGuidance(): string {
-		if (this._consecutiveFailures < 2) {return '';}
+		if (this._consecutiveFailures < 2) { return ''; }
 		return `\n\n[Deterministic debug policy: ${this._consecutiveFailures} consecutive failures. Do not repeat the same call. Re-read current state, isolate the smallest cause, choose a different repair, then rerun the objective verification.]`;
 	}
 
@@ -78,45 +88,55 @@ export class AgentExecutionState {
 		this._lastFailure = undefined;
 		this._consecutiveFailures = 0;
 		this._finalDiffReviewRevision = undefined;
+		this._uiMutationRevision = undefined;
+		this._browserAssertionRevision = undefined;
+		this._browserConsoleRevision = undefined;
+		this._browserNetworkRevision = undefined;
+		this._browserScreenshotRevision = undefined;
 		this._unresolvedCriticalFailures.clear();
 		this._openTransactions.clear();
 	}
 
 	restoreAfterCrash(value: unknown): void {
-		if (!value || typeof value !== 'object') {return;}
+		if (!value || typeof value !== 'object') { return; }
 		const snapshot = value as Partial<AgentExecutionSnapshot>;
 		const revision = Number(snapshot.mutationRevision);
 		if (!Number.isInteger(revision) || revision <= 0) {
 			this._openTransactions.clear();
-			for (const transactionId of Array.isArray(snapshot.openTransactions) ? snapshot.openTransactions : []) {if (typeof transactionId === 'string' && transactionId) {this._openTransactions.add(transactionId.slice(0, 200));}}
+			for (const transactionId of Array.isArray(snapshot.openTransactions) ? snapshot.openTransactions : []) { if (typeof transactionId === 'string' && transactionId) { this._openTransactions.add(transactionId.slice(0, 200)); } }
 			this._unresolvedCriticalFailures.clear();
-			for (const failure of Array.isArray(snapshot.unresolvedCriticalFailures) ? snapshot.unresolvedCriticalFailures : []) {if (typeof failure === 'string' && failure) {this._unresolvedCriticalFailures.add(failure.slice(0, 1000));}}
-			if (this._openTransactions.size) {this._unresolvedCriticalFailures.add('Recovered state contains interrupted transactions; rollback or reconcile them before completion.');}
+			for (const failure of Array.isArray(snapshot.unresolvedCriticalFailures) ? snapshot.unresolvedCriticalFailures : []) { if (typeof failure === 'string' && failure) { this._unresolvedCriticalFailures.add(failure.slice(0, 1000)); } }
+			if (this._openTransactions.size) { this._unresolvedCriticalFailures.add('Recovered state contains interrupted transactions; rollback or reconcile them before completion.'); }
 			this.stateMachine.restore(snapshot.phase);
-			if (this._openTransactions.size) {this.stateMachine.transition('debugging', 'Recovered an interrupted transaction before its mutation revision was committed.');}
+			if (this._openTransactions.size) { this.stateMachine.transition('debugging', 'Recovered an interrupted transaction before its mutation revision was committed.'); }
 			return;
 		}
 		this._mutationRevision = revision;
 		this._externalInteractionRevision = Number.isInteger(snapshot.externalInteractionRevision) ? Math.max(0, Number(snapshot.externalInteractionRevision)) : 0;
 		this._modifiedFiles.clear();
-		for (const file of Array.isArray(snapshot.modifiedFiles) ? snapshot.modifiedFiles : []) {if (typeof file === 'string' && file) {this._modifiedFiles.add(file);}}
+		for (const file of Array.isArray(snapshot.modifiedFiles) ? snapshot.modifiedFiles : []) { if (typeof file === 'string' && file) { this._modifiedFiles.add(file); } }
 		this._nonRollbackableEffects.length = 0;
-		for (const effect of Array.isArray(snapshot.nonRollbackableEffects) ? snapshot.nonRollbackableEffects : []) {if (typeof effect === 'string') {this._nonRollbackableEffects.push(effect.slice(0, 1000));}}
+		for (const effect of Array.isArray(snapshot.nonRollbackableEffects) ? snapshot.nonRollbackableEffects : []) { if (typeof effect === 'string') { this._nonRollbackableEffects.push(effect.slice(0, 1000)); } }
 		// Never trust a pre-crash verification result: files and processes may have changed while the agent was down.
 		this._verification = undefined;
 		this._lastFailure = 'Recovered an interrupted mutation revision. Reinspect modified files and rerun verification before completion.';
 		this._consecutiveFailures = Math.max(1, Number(snapshot.consecutiveFailures) || 0);
 		this._finalDiffReviewRevision = undefined;
+		this._uiMutationRevision = Number.isInteger(snapshot.uiMutationRevision) ? Number(snapshot.uiMutationRevision) : undefined;
+		this._browserAssertionRevision = undefined;
+		this._browserConsoleRevision = undefined;
+		this._browserNetworkRevision = undefined;
+		this._browserScreenshotRevision = undefined;
 		this._openTransactions.clear();
 		for (const transactionId of Array.isArray(snapshot.openTransactions) ? snapshot.openTransactions : []) {
-			if (typeof transactionId === 'string' && transactionId) {this._openTransactions.add(transactionId.slice(0, 200));}
+			if (typeof transactionId === 'string' && transactionId) { this._openTransactions.add(transactionId.slice(0, 200)); }
 		}
 		this._unresolvedCriticalFailures.clear();
 		for (const failure of Array.isArray(snapshot.unresolvedCriticalFailures) ? snapshot.unresolvedCriticalFailures : []) {
-			if (typeof failure === 'string' && failure) {this._unresolvedCriticalFailures.add(failure.slice(0, 1000));}
+			if (typeof failure === 'string' && failure) { this._unresolvedCriticalFailures.add(failure.slice(0, 1000)); }
 		}
 		this._unresolvedCriticalFailures.add('Recovered state requires fresh inspection and verification.');
-		if (this._openTransactions.size) {this._unresolvedCriticalFailures.add('Recovered state contains interrupted transactions; rollback or reconcile them before completion.');}
+		if (this._openTransactions.size) { this._unresolvedCriticalFailures.add('Recovered state contains interrupted transactions; rollback or reconcile them before completion.'); }
 		this.stateMachine.restore(snapshot.phase);
 		this.stateMachine.transition('debugging', 'Recovered an interrupted mutation revision.');
 	}
@@ -125,8 +145,13 @@ export class AgentExecutionState {
 
 	recordMutation(filePaths: readonly string[] = []): void {
 		this._mutationRevision++;
-		for (const filePath of filePaths) {if (filePath) {this._modifiedFiles.add(filePath);}}
+		for (const filePath of filePaths) { if (filePath) { this._modifiedFiles.add(filePath); } }
+		if (this._uiMutationRevision !== undefined || filePaths.some(isUserInterfaceFile)) { this._uiMutationRevision = this._mutationRevision; }
 		this._verification = undefined;
+		this._browserAssertionRevision = undefined;
+		this._browserConsoleRevision = undefined;
+		this._browserNetworkRevision = undefined;
+		this._browserScreenshotRevision = undefined;
 		this._finalDiffReviewRevision = undefined;
 		this._unresolvedCriticalFailures.delete('Verification failed.');
 		this.transitionToApplying('A controlled filesystem mutation was committed.');
@@ -134,6 +159,7 @@ export class AgentExecutionState {
 
 	recordNonRollbackableEffect(effect: string): void {
 		this._mutationRevision++;
+		if (this._uiMutationRevision !== undefined) { this._uiMutationRevision = this._mutationRevision; }
 		this._nonRollbackableEffects.push(effect.slice(0, 1000));
 		this._verification = undefined;
 		this._finalDiffReviewRevision = undefined;
@@ -143,12 +169,20 @@ export class AgentExecutionState {
 	recordCommandMutation(effect: string, filePaths: readonly string[]): void {
 		this._mutationRevision++;
 		this._nonRollbackableEffects.push(effect.slice(0, 1000));
-		for (const filePath of filePaths) {if (filePath) {this._modifiedFiles.add(filePath);}}
+		for (const filePath of filePaths) { if (filePath) { this._modifiedFiles.add(filePath); } }
+		if (this._uiMutationRevision !== undefined || filePaths.some(isUserInterfaceFile)) { this._uiMutationRevision = this._mutationRevision; }
 		this._verification = undefined;
 		this._finalDiffReviewRevision = undefined;
 		this.transitionToApplying(filePaths.length
 			? `A terminal command changed ${filePaths.length} observed workspace path(s).`
 			: 'A confirmed command may have produced mutations that were not observable as workspace file events.');
+	}
+
+	recordBrowserEvidence(action: 'assert' | 'get_console_logs' | 'get_network_logs' | 'screenshot'): void {
+		if (action === 'assert') { this._browserAssertionRevision = this._mutationRevision; }
+		else if (action === 'get_console_logs') { this._browserConsoleRevision = this._mutationRevision; }
+		else if (action === 'get_network_logs') { this._browserNetworkRevision = this._mutationRevision; }
+		else { this._browserScreenshotRevision = this._mutationRevision; }
 	}
 
 	recordExternalInteraction(): void {
@@ -176,7 +210,7 @@ export class AgentExecutionState {
 		this._verification = undefined;
 		this._lastFailure = reason.slice(0, 4000);
 		this._consecutiveFailures++;
-		if (critical) {this._unresolvedCriticalFailures.add(reason.slice(0, 1000));}
+		if (critical) { this._unresolvedCriticalFailures.add(reason.slice(0, 1000)); }
 		this.stateMachine.transition('debugging', reason);
 	}
 
@@ -184,8 +218,8 @@ export class AgentExecutionState {
 	markFailed(reason: string): void {
 		this._lastFailure = reason.slice(0, 4000);
 		this._consecutiveFailures++;
-		if (this.stateMachine.phase === 'completed' || this.stateMachine.phase === 'failed' || this.stateMachine.phase === 'cancelled') {return;}
-		if (this.stateMachine.phase === 'idle') {this.stateMachine.transition('classifying', 'Runtime failed during initialization.');}
+		if (this.stateMachine.phase === 'completed' || this.stateMachine.phase === 'failed' || this.stateMachine.phase === 'cancelled') { return; }
+		if (this.stateMachine.phase === 'idle') { this.stateMachine.transition('classifying', 'Runtime failed during initialization.'); }
 		this.stateMachine.transition('failed', reason);
 	}
 
@@ -200,14 +234,22 @@ export class AgentExecutionState {
 	finishTransaction(transactionId: string): void { this._openTransactions.delete(transactionId); }
 
 	canComplete(input: AgentCompletionGateInput): AgentCompletionDecision {
-		if (this._openTransactions.size) {return { allowed: false, reason: 'one or more mutation transactions are still open' };}
-		if (this._unresolvedCriticalFailures.size) {return { allowed: false, reason: 'there are unresolved critical failures' };}
-		if (input.hasPlan && (!input.planComplete || !input.acceptanceCriteriaSatisfied)) {return { allowed: false, reason: 'the execution plan or its acceptance criteria are incomplete' };}
-		if (!this.hasMutations) {return { allowed: true };}
-		if (!input.hasPlan) {return { allowed: false, reason: 'the execution plan is missing' };}
-		if (!this._verification || this._verification.mutationRevision !== this._mutationRevision) {return { allowed: false, reason: 'there is no successful verification for the latest mutation revision' };}
-		if (input.newDiagnosticErrors > 0 || this._verification.newDiagnosticErrors > 0) {return { allowed: false, reason: 'the task introduced language-service errors' };}
-		if (this._finalDiffReviewRevision !== this._mutationRevision) {return { allowed: false, reason: 'the final diff has not been reviewed after the latest mutation' };}
+		if (this._openTransactions.size) { return { allowed: false, reason: 'one or more mutation transactions are still open' }; }
+		if (this._unresolvedCriticalFailures.size) { return { allowed: false, reason: 'there are unresolved critical failures' }; }
+		if (input.hasPlan && (!input.planComplete || !input.acceptanceCriteriaSatisfied)) { return { allowed: false, reason: 'the execution plan or its acceptance criteria are incomplete' }; }
+		if (!this.hasMutations) { return { allowed: true }; }
+		if (!input.hasPlan) { return { allowed: false, reason: 'the execution plan is missing' }; }
+		if (!this._verification || this._verification.mutationRevision !== this._mutationRevision) { return { allowed: false, reason: 'there is no successful verification for the latest mutation revision' }; }
+		if (this._uiMutationRevision === this._mutationRevision && (
+			this._browserAssertionRevision !== this._mutationRevision
+			|| this._browserConsoleRevision !== this._mutationRevision
+			|| this._browserNetworkRevision !== this._mutationRevision
+			|| this._browserScreenshotRevision !== this._mutationRevision
+		)) {
+			return { allowed: false, reason: 'UI changes require a passing browser assertion, console and network inspections, and a screenshot for the latest mutation revision' };
+		}
+		if (input.newDiagnosticErrors > 0 || this._verification.newDiagnosticErrors > 0) { return { allowed: false, reason: 'the task introduced language-service errors' }; }
+		if (this._finalDiffReviewRevision !== this._mutationRevision) { return { allowed: false, reason: 'the final diff has not been reviewed after the latest mutation' }; }
 		return { allowed: true };
 	}
 
@@ -218,14 +260,14 @@ export class AgentExecutionState {
 
 	markCompleted(input: AgentCompletionGateInput): void {
 		const decision = this.canComplete(input);
-		if (!decision.allowed) {throw new Error(`Completion gate rejected: ${decision.reason}.`);}
-		if (this.stateMachine.phase !== 'verifying') {this.stateMachine.transition('verifying', 'Runtime is evaluating deterministic completion gates.');}
+		if (!decision.allowed) { throw new Error(`Completion gate rejected: ${decision.reason}.`); }
+		if (this.stateMachine.phase !== 'verifying') { this.stateMachine.transition('verifying', 'Runtime is evaluating deterministic completion gates.'); }
 		this.stateMachine.transition('completed', 'All deterministic completion gates passed.');
 	}
 
 	markRolledBack(files?: readonly string[], entireRun = true): void {
-		if (entireRun) {this._modifiedFiles.clear();}
-		else {for (const file of files ?? []) {this._modifiedFiles.delete(file);}}
+		if (entireRun) { this._modifiedFiles.clear(); }
+		else { for (const file of files ?? []) { this._modifiedFiles.delete(file); } }
 		this._verification = undefined;
 		if (this._nonRollbackableEffects.length) {
 			this._lastFailure = 'File snapshots were restored, but confirmed external command effects cannot be rolled back automatically.';
@@ -235,7 +277,7 @@ export class AgentExecutionState {
 			this._lastFailure = undefined;
 			this._consecutiveFailures = 0;
 		}
-		if (!entireRun) {this._mutationRevision++;}
+		if (!entireRun) { this._mutationRevision++; }
 		this._finalDiffReviewRevision = undefined;
 		this._openTransactions.clear();
 		this._unresolvedCriticalFailures.delete('Recovered state contains interrupted transactions; rollback or reconcile them before completion.');
@@ -264,9 +306,20 @@ export class AgentExecutionState {
 			lastFailure: this._lastFailure,
 			consecutiveFailures: this._consecutiveFailures,
 			finalDiffReviewRevision: this._finalDiffReviewRevision,
+			uiMutationRevision: this._uiMutationRevision,
+			browserAssertionRevision: this._browserAssertionRevision,
+			browserConsoleRevision: this._browserConsoleRevision,
+			browserNetworkRevision: this._browserNetworkRevision,
+			browserScreenshotRevision: this._browserScreenshotRevision,
 			unresolvedCriticalFailures: [...this._unresolvedCriticalFailures],
 			openTransactions: [...this._openTransactions],
 			transitionHistory: [...this.stateMachine.history],
 		};
 	}
+}
+
+function isUserInterfaceFile(filePath: string): boolean {
+	if (/\.(?:html?|css|scss|sass|less|tsx|jsx|vue|svelte)$/i.test(filePath)) { return true; }
+	return /(?:^|[\\/])(?:app|web|webview|ui|browser|renderer|components?)(?:[\\/]|$)/i.test(filePath)
+		&& /\.(?:ts|js)$/i.test(filePath);
 }

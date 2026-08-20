@@ -5,6 +5,7 @@
 
 import { hash } from '../../../../../../base/common/hash.js';
 import { AgentCommandRisk, classifyAgentCommand } from '../utils/AgentCommandPolicy.js';
+import { evaluateBrowserPolicy } from '../../../../../../platform/browserView/common/browserPolicy.js';
 
 export type NativeToolEffect = 'read' | 'verification' | 'mutation' | 'control' | 'external_read' | 'external_interaction' | 'external_mutation';
 export type NativeToolMetric = 'rag' | 'patch' | 'verification' | 'rollback' | 'delegate' | 'none';
@@ -68,21 +69,22 @@ const UNKNOWN_POLICY: NativeToolPolicy = {
 };
 
 export function resolveNativeToolPolicy(name: string, parameters: Readonly<Record<string, unknown>> = {}): NativeToolPolicy {
-	if (name.startsWith('mcp__')) {return { ...UNKNOWN_POLICY, effect: 'external_mutation' };}
+	if (name.startsWith('mcp__')) { return { ...UNKNOWN_POLICY, effect: 'external_mutation' }; }
 	if (name === 'execute_command' || name === 'run_command' || name === 'run_background') {
 		return commandPolicy(classifyAgentCommand(String(parameters.command ?? '')));
 	}
 	if (name === 'git_operation') {
 		const operation = String(parameters.operation ?? '');
-		if (['branch_list', 'stash_list', 'show', 'blame', 'rev_parse', 'worktree_list'].includes(operation)) {return READ(['operation', 'name', 'ref', 'path']);}
-		if (['restore', 'branch_delete', 'worktree_remove', 'merge_abort', 'rebase', 'rebase_abort'].includes(operation)) {return { ...MUTATION(['operation', 'name', 'ref', 'path']), risk: 'destructive' };}
+		if (['branch_list', 'stash_list', 'show', 'blame', 'rev_parse', 'worktree_list'].includes(operation)) { return READ(['operation', 'name', 'ref', 'path']); }
+		if (['restore', 'branch_delete', 'worktree_remove', 'merge_abort', 'rebase', 'rebase_abort'].includes(operation)) { return { ...MUTATION(['operation', 'name', 'ref', 'path']), risk: 'destructive' }; }
 	}
 	if (name === 'browser_action') {
 		const action = String(parameters.action ?? '');
-		if (action === 'get_storage_value') {return { effect: 'external_read', risk: 'caution', parallelSafe: true, coalescible: false, requiresConfirmation: true, targetKeys: ['sessionId', 'action', 'storageArea', 'storageKey'], metric: 'none' };}
-		if (['screenshot', 'get_console_logs', 'get_network_logs', 'get_text', 'get_title', 'inspect_dom', 'accessibility_snapshot', 'get_storage', 'list_storage_keys', 'wait_for', 'assert', 'evaluate'].includes(action)) {return { ...READ(['sessionId', 'action', 'selector', 'assertion', 'expected']), effect: 'external_read' };}
-		if (action === 'close') {return { ...CONTROL(['sessionId', 'action']), effect: 'control', risk: 'safe', requiresConfirmation: false };}
-		return { ...UNKNOWN_POLICY, effect: action === 'launch' ? 'external_read' : 'external_interaction', targetKeys: ['sessionId', 'action', 'url', 'selector'] };
+		const browserDecision = evaluateBrowserPolicy({ action, url: typeof parameters.url === 'string' ? parameters.url : undefined, selector: typeof parameters.selector === 'string' ? parameters.selector : undefined, text: typeof parameters.text === 'string' ? parameters.text : undefined });
+		if (action === 'get_storage_value') { return { effect: 'external_read', risk: 'caution', parallelSafe: true, coalescible: false, requiresConfirmation: true, targetKeys: ['sessionId', 'action', 'storageArea', 'storageKey'], metric: 'none' }; }
+		if (['screenshot', 'get_console_logs', 'get_network_logs', 'get_text', 'get_title', 'inspect_dom', 'accessibility_snapshot', 'get_storage', 'list_storage_keys', 'wait_for', 'assert'].includes(action)) { return { ...READ(['sessionId', 'action', 'selector', 'assertion', 'expected']), effect: 'external_read', requiresConfirmation: browserDecision.requiresConfirmation }; }
+		if (action === 'close') { return { ...CONTROL(['sessionId', 'action']), effect: 'control', risk: 'safe', requiresConfirmation: false }; }
+		return { ...UNKNOWN_POLICY, effect: action === 'launch' ? 'external_read' : 'external_interaction', requiresConfirmation: browserDecision.requiresConfirmation, risk: browserDecision.access === 'sensitive' ? 'destructive' : 'caution', targetKeys: ['sessionId', 'action', 'url', 'selector'] };
 	}
 	if (name === 'manage_terminal') {
 		return String(parameters.action ?? '') === 'get_output'
@@ -98,9 +100,9 @@ export function isMutationEffect(effect: NativeToolEffect): boolean {
 
 export function extractToolTargets(parameters: Readonly<Record<string, unknown>>, policy: NativeToolPolicy): readonly string[] {
 	const values: string[] = [];
-	for (const key of policy.targetKeys) {collectTargets(parameters[key], `${key}=`, values, 0);}
+	for (const key of policy.targetKeys) { collectTargets(parameters[key], `${key}=`, values, 0); }
 	if (!values.length) {
-		for (const [key, value] of Object.entries(parameters).slice(0, 32)) {collectTargets(value, `${key}=`, values, 0);}
+		for (const [key, value] of Object.entries(parameters).slice(0, 32)) { collectTargets(value, `${key}=`, values, 0); }
 	}
 	return [...new Set(values)].sort().slice(0, 64);
 }
@@ -110,13 +112,13 @@ export function hashToolParameters(value: unknown): string {
 	const seen = new WeakSet<object>();
 	let visited = 0;
 	const walk = (candidate: unknown, depth: number): string => {
-		if (++visited > 20_000) {return '[entry-budget]';}
-		if (depth > 32) {return '[depth-budget]';}
-		if (typeof candidate === 'string') {return `s:${candidate.length}:${hexHash(candidate)}`;}
-		if (candidate === null || typeof candidate !== 'object') {return `${typeof candidate}:${String(candidate)}`;}
-		if (seen.has(candidate)) {return '[cycle]';}
+		if (++visited > 20_000) { return '[entry-budget]'; }
+		if (depth > 32) { return '[depth-budget]'; }
+		if (typeof candidate === 'string') { return `s:${candidate.length}:${hexHash(candidate)}`; }
+		if (candidate === null || typeof candidate !== 'object') { return `${typeof candidate}:${String(candidate)}`; }
+		if (seen.has(candidate)) { return '[cycle]'; }
 		seen.add(candidate);
-		if (Array.isArray(candidate)) {return `a:${candidate.length}:${hexHash(candidate.map(item => walk(item, depth + 1)).join('|'))}`;}
+		if (Array.isArray(candidate)) { return `a:${candidate.length}:${hexHash(candidate.map(item => walk(item, depth + 1)).join('|'))}`; }
 		const record = candidate as Record<string, unknown>;
 		const entries = Object.keys(record).sort().slice(0, 2_000).map(key => `${key}:${walk(record[key], depth + 1)}`);
 		return `o:${Object.keys(record).length}:${hexHash(entries.join('|'))}`;
@@ -125,24 +127,24 @@ export function hashToolParameters(value: unknown): string {
 }
 
 function commandPolicy(risk: AgentCommandRisk): NativeToolPolicy {
-	if (risk === 'read_only') {return READ(['command', 'cwd']);}
-	if (risk === 'verification') {return { effect: 'verification', risk: 'caution', parallelSafe: false, coalescible: false, requiresConfirmation: true, targetKeys: ['command', 'cwd'], metric: 'verification' };}
+	if (risk === 'read_only') { return READ(['command', 'cwd']); }
+	if (risk === 'verification') { return { effect: 'verification', risk: 'caution', parallelSafe: false, coalescible: false, requiresConfirmation: true, targetKeys: ['command', 'cwd'], metric: 'verification' }; }
 	return { ...MUTATION(['command', 'cwd']), risk: risk === 'destructive' ? 'destructive' : 'caution' };
 }
 
 function collectTargets(value: unknown, prefix: string, result: string[], depth: number): void {
-	if (result.length >= 64 || depth > 4 || value === undefined || value === null) {return;}
+	if (result.length >= 64 || depth > 4 || value === undefined || value === null) { return; }
 	if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
 		const text = String(value);
 		result.push(`${prefix}${text.length <= 300 ? text : `${text.slice(0, 120)}#${hexHash(text)}`}`);
 		return;
 	}
 	if (Array.isArray(value)) {
-		for (const item of value.slice(0, 64)) {collectTargets(item, prefix, result, depth + 1);}
+		for (const item of value.slice(0, 64)) { collectTargets(item, prefix, result, depth + 1); }
 		return;
 	}
 	if (typeof value === 'object') {
-		for (const [key, child] of Object.entries(value).slice(0, 64)) {collectTargets(child, `${prefix}${key}.`, result, depth + 1);}
+		for (const [key, child] of Object.entries(value).slice(0, 64)) { collectTargets(child, `${prefix}${key}.`, result, depth + 1); }
 	}
 }
 

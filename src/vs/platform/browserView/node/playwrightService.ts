@@ -15,6 +15,10 @@ import { IBrowserViewGroup } from '../common/browserViewGroup.js';
 import { PlaywrightTab, DialogInterruptedError } from './playwrightTab.js';
 import { CDPRequest, CDPResponse } from '../common/cdp/types.js';
 import { generateUuid } from '../../../base/common/uuid.js';
+import { BrowserPageOwnership } from '../common/browserPageOwnership.js';
+import { hash } from '../../../base/common/hash.js';
+import { join } from '../../../base/common/path.js';
+import { promises as fs } from 'fs';
 
 // eslint-disable-next-line local/code-import-patterns
 import type { Browser, BrowserContext, ConnectOverCDPTransport, Page } from 'playwright-core';
@@ -29,6 +33,10 @@ export interface IPlaywrightActionScope {
 const DEFERRED_RESULT_CLEANUP_MS = 5 * 60_000; // 5 minutes
 const SESSION_INACTIVITY_MS = 30 * 60_000; // 30 minutes
 const OPEN_PAGE_NAVIGATION_TIMEOUT_MS = 30_000;
+const MAX_SESSION_ACTIONS = 200;
+const MAX_SESSION_NAVIGATIONS = 40;
+const MAX_RUN_CODE_ACTIONS = 30;
+const MAX_IDENTICAL_ACTIONS = 5;
 
 /**
  * Narrow a raw Playwright transport payload to a {@link CDPRequest}.
@@ -55,8 +63,8 @@ function isCDPRequest(message: object): message is CDPRequest {
  * Each session has its own Playwright browser connection and browser view
  * group, created eagerly by the service when the session is first requested.
  *
- * Page tracking is currently global: tracked pages are shared across all
- * sessions so every session can interact with every tracked page.
+ * The global tracked set records pages the user has made shareable. Actual
+ * access is scoped per conversation and never replayed into other sessions.
  */
 export class PlaywrightService extends Disposable implements IPlaywrightService {
 	declare readonly _serviceBrand: undefined;
@@ -69,8 +77,8 @@ export class PlaywrightService extends Disposable implements IPlaywrightService 
 	/** Inactivity timers keyed by session ID. */
 	private readonly _inactivityTimers = this._register(new DisposableMap<string, IDisposable>());
 
-	/** Global set of tracked page IDs (shared across all sessions). */
-	private readonly _trackedPages = new Set<string>();
+	private readonly _ownership = new BrowserPageOwnership();
+	private readonly _artifactDirectories = new Map<string, string>();
 
 	private readonly _onDidChangeTrackedPages = this._register(new Emitter<readonly string[]>());
 	readonly onDidChangeTrackedPages: Event<readonly string[]> = this._onDidChangeTrackedPages.event;
@@ -83,6 +91,20 @@ export class PlaywrightService extends Disposable implements IPlaywrightService 
 		private readonly telemetryService: ITelemetryService,
 	) {
 		super();
+	}
+
+	async configureSessionArtifacts(sessionId: string, workspaceRoot: string): Promise<void> {
+		this._assertSessionId(sessionId);
+		if (!workspaceRoot) { return; }
+		const directory = join(workspaceRoot, '.folzeur', 'browser', `session-${(hash(sessionId) >>> 0).toString(16)}`);
+		await fs.mkdir(directory, { recursive: true });
+		this._artifactDirectories.set(sessionId, directory);
+		this._sessions.get(sessionId)?.setArtifactDirectory(directory);
+	}
+
+	async getSessionArtifactDirectory(sessionId: string): Promise<string | undefined> {
+		this._assertSessionId(sessionId);
+		return this._artifactDirectories.get(sessionId);
 	}
 
 	/**
@@ -178,30 +200,20 @@ export class PlaywrightService extends Disposable implements IPlaywrightService 
 			this.logService,
 			this.agentNetworkFilterService,
 			this.telemetryService,
-			viewId => this.startTrackingPage(viewId),
+			this._artifactDirectories.get(sessionId),
+			viewId => this.claimPage(sessionId, viewId),
 		);
 
-		// Keep the global tracked set in sync with group events. When a
-		// view is added via external means (e.g. CDP createTarget), the
-		// group fires onDidAddView — update _trackedPages accordingly.
-		// The Set makes double-adds (from startTrackingPage) harmless.
-		// Also replicate the view into other sessions so that CDP-created
-		// targets become accessible everywhere, not just the originating session.
+		// Targets created through a session are owned only by that session.
 		session.registerDisposable(group.onDidAddView(e => {
-			if (!this._trackedPages.has(e.viewId)) {
-				this._trackedPages.add(e.viewId);
+			if (!this._ownership.isShareable(e.viewId)) {
+				this._ownership.markShareable(e.viewId);
 				this._fireTrackedPages();
 			}
-			for (const [id, other] of this._sessions) {
-				if (id !== sessionId) {
-					void other.group.addView(e.viewId).catch(() => { });
-				}
-			}
+			this._ownership.ownerCreatedPage(sessionId, e.viewId);
 		}));
 		session.registerDisposable(group.onDidRemoveView(e => {
-			if (this._trackedPages.delete(e.viewId)) {
-				this._fireTrackedPages();
-			}
+			this._ownership.releaseOwnedPage(sessionId, e.viewId);
 		}));
 
 		// On browser disconnect, dispose the session so it will be
@@ -214,16 +226,14 @@ export class PlaywrightService extends Disposable implements IPlaywrightService 
 
 		this._sessions.set(sessionId, session);
 
-		// Replay globally tracked pages into the new session's group.
-		// Pages may have been removed since they were tracked — catch and
-		// evict stale entries so they don't accumulate.
-		for (const viewId of [...this._trackedPages]) {
+		// Reconnect only this conversation's owned pages after inactivity or a
+		// transient browser disconnect.
+		for (const viewId of this._ownership.ownedPages(sessionId)) {
 			try {
 				await session.group.addView(viewId);
 			} catch {
-				this.logService.debug(`[PlaywrightService] Stale tracked page ${viewId} removed during replay`);
-				this._trackedPages.delete(viewId);
-				this._fireTrackedPages();
+				this.logService.debug(`[PlaywrightService] Stale owned page ${viewId} removed during replay`);
+				this._ownership.releaseOwnedPage(sessionId, viewId);
 			}
 		}
 
@@ -231,23 +241,19 @@ export class PlaywrightService extends Disposable implements IPlaywrightService 
 		return session;
 	}
 
-	// --- Page tracking (global) ---
+	// --- Page sharing and conversation ownership ---
 
 	async startTrackingPage(viewId: string): Promise<void> {
 		// Update the canonical set directly so tracking works even when
 		// no sessions exist yet. The Set makes the double-add from
 		// the group's onDidAddView listener harmless.
-		if (!this._trackedPages.has(viewId)) {
-			this._trackedPages.add(viewId);
+		if (this._ownership.markShareable(viewId)) {
 			this._fireTrackedPages();
-		}
-		for (const session of this._sessions.values()) {
-			session.group.addView(viewId);
 		}
 	}
 
 	async stopTrackingPage(viewId: string): Promise<void> {
-		if (this._trackedPages.delete(viewId)) {
+		if (this._ownership.stopSharing(viewId)) {
 			this._fireTrackedPages();
 		}
 		for (const session of this._sessions.values()) {
@@ -256,33 +262,67 @@ export class PlaywrightService extends Disposable implements IPlaywrightService 
 	}
 
 	async isPageTracked(viewId: string): Promise<boolean> {
-		return this._trackedPages.has(viewId);
+		return this._ownership.isShareable(viewId);
 	}
 
 	async getTrackedPages(): Promise<readonly string[]> {
-		return [...this._trackedPages];
+		return this._ownership.shareablePages();
+	}
+
+	async claimPage(sessionId: string, viewId: string): Promise<void> {
+		this._assertSessionId(sessionId);
+		if (!this._ownership.isShareable(viewId)) {
+			throw new Error(`Page "${viewId}" has not been shared with the agent.`);
+		}
+		if (this._ownership.owns(sessionId, viewId)) { return; }
+		this._ownership.claim(sessionId, viewId);
+		try {
+			const session = await this._getOrCreateSession(sessionId);
+			await session.group.addView(viewId);
+		} catch (error) {
+			this._ownership.releaseOwnedPage(sessionId, viewId);
+			throw error;
+		}
+	}
+
+	async isPageOwned(sessionId: string, viewId: string): Promise<boolean> {
+		return this._ownership.owns(sessionId, viewId);
+	}
+
+	async getOwnedPages(sessionId: string): Promise<readonly string[]> {
+		return this._ownership.ownedPages(sessionId);
 	}
 
 	// --- Playwright operations (delegated to per-session instances) ---
 
 	async openPage(sessionId: string, url: string): Promise<{ pageId: string; summary: string }> {
+		this._assertSessionId(sessionId);
 		const session = await this._getOrCreateSession(sessionId);
 		return session.openPage(url);
 	}
 
 	async getSummary(sessionId: string, pageId: string): Promise<string> {
+		this._requireOwnedPage(sessionId, pageId);
 		const session = await this._getOrCreateSession(sessionId);
 		return session.getSummary(pageId);
 	}
 
+	async getPageMetadata(sessionId: string, pageId: string): Promise<{ url: string; title: string }> {
+		this._requireOwnedPage(sessionId, pageId);
+		const session = await this._getOrCreateSession(sessionId);
+		return session.getPageMetadata(pageId);
+	}
+
 	async invokeFunctionRaw<T>(sessionId: string, pageId: string, fnDef: string, ...args: unknown[]): Promise<T> {
+		this._requireOwnedPage(sessionId, pageId);
 		const session = await this._getOrCreateSession(sessionId);
 		return session.invokeFunctionRaw(pageId, fnDef, ...args);
 	}
 
-	async invokeFunction(sessionId: string, pageId: string, fnDef: string, args: unknown[] = [], timeoutMs?: number): Promise<IInvokeFunctionResult> {
+	async invokeFunction(sessionId: string, pageId: string, fnDef: string, args: unknown[] = [], timeoutMs?: number, isArbitraryCode = false): Promise<IInvokeFunctionResult> {
+		this._requireOwnedPage(sessionId, pageId);
 		const session = await this._getOrCreateSession(sessionId);
-		return session.invokeFunction(pageId, fnDef, args, timeoutMs);
+		return session.invokeFunction(pageId, fnDef, args, timeoutMs, isArbitraryCode);
 	}
 
 	async waitForDeferredResult(sessionId: string, deferredResultId: string, timeoutMs: number): Promise<IInvokeFunctionResult> {
@@ -291,11 +331,13 @@ export class PlaywrightService extends Disposable implements IPlaywrightService 
 	}
 
 	async replyToFileChooser(sessionId: string, pageId: string, files: string[]): Promise<{ summary: string }> {
+		this._requireOwnedPage(sessionId, pageId);
 		const session = await this._getOrCreateSession(sessionId);
 		return session.replyToFileChooser(pageId, files);
 	}
 
 	async replyToDialog(sessionId: string, pageId: string, accept: boolean, promptText?: string): Promise<{ summary: string }> {
+		this._requireOwnedPage(sessionId, pageId);
 		const session = await this._getOrCreateSession(sessionId);
 		return session.replyToDialog(pageId, accept, promptText);
 	}
@@ -308,12 +350,27 @@ export class PlaywrightService extends Disposable implements IPlaywrightService 
 			this._sessions.deleteAndDispose(sessionId);
 			this._inactivityTimers.deleteAndDispose(sessionId);
 		}
+		this._ownership.releaseSession(sessionId);
+		this._artifactDirectories.delete(sessionId);
 	}
 
 	// --- Private helpers ---
 
 	private _fireTrackedPages(): void {
-		this._onDidChangeTrackedPages.fire([...this._trackedPages]);
+		this._onDidChangeTrackedPages.fire(this._ownership.shareablePages());
+	}
+
+	private _assertSessionId(sessionId: string): void {
+		if (!sessionId || sessionId === '<default>') {
+			throw new Error('A conversation identity is required for integrated browser access.');
+		}
+	}
+
+	private _requireOwnedPage(sessionId: string, pageId: string): void {
+		this._assertSessionId(sessionId);
+		if (!this._ownership.owns(sessionId, pageId)) {
+			throw new Error(`Page "${pageId}" is not owned by this conversation. Share or open it from this conversation first.`);
+		}
 	}
 
 	/**
@@ -345,6 +402,11 @@ export class PlaywrightService extends Disposable implements IPlaywrightService 
  * Playwright CDP events.
  */
 class PlaywrightSession extends Disposable {
+	private _actionCount = 0;
+	private _navigationCount = 0;
+	private _runCodeCount = 0;
+	private _lastAction = '';
+	private _identicalActionCount = 0;
 
 	// --- Page matching ---
 
@@ -359,6 +421,7 @@ class PlaywrightSession extends Disposable {
 	private _pageQueue: Array<{ page: Page; viewId: DeferredPromise<string> }> = [];
 
 	private readonly _watchedContexts = new WeakSet<BrowserContext>();
+	private readonly _tracePaths = new Map<BrowserContext, string>();
 	private _scanTimer: ReturnType<typeof setInterval> | undefined;
 	private _openContext: BrowserContext | undefined = undefined;
 
@@ -377,6 +440,7 @@ class PlaywrightSession extends Disposable {
 		private readonly logService: ILogService,
 		private readonly agentNetworkFilterService: IAgentNetworkFilterService,
 		private readonly telemetryService: ITelemetryService,
+		private artifactDirectory: string | undefined,
 		private readonly onDidCreatePage: (viewId: string) => Promise<void>,
 	) {
 		super();
@@ -388,6 +452,12 @@ class PlaywrightSession extends Disposable {
 		this._scanForNewContexts();
 	}
 
+	setArtifactDirectory(directory: string): void {
+		this.artifactDirectory = directory;
+		for (const page of this._viewIdToPage.values()) { this._tabs.get(page)?.setArtifactDirectory(directory); }
+		for (const context of this._browser.contexts()) { this._startTracing(context); }
+	}
+
 	/** Register a disposable to be cleaned up when this session is disposed. */
 	registerDisposable(d: IDisposable): void {
 		this._register(d);
@@ -396,6 +466,7 @@ class PlaywrightSession extends Disposable {
 	// --- Page operations ---
 
 	async openPage(url: string): Promise<{ pageId: string; summary: string }> {
+		this._guardAction(`open:${url}`, true);
 		if (!this._openContext) {
 			this._openContext = await this._browser.newContext();
 			this._onContextAdded(this._openContext);
@@ -422,15 +493,24 @@ class PlaywrightSession extends Disposable {
 	}
 
 	async getSummary(pageId: string): Promise<string> {
+		this._guardAction(`summary:${pageId}`);
 		return this._getSummary(pageId, true);
 	}
 
+	async getPageMetadata(pageId: string): Promise<{ url: string; title: string }> {
+		const page = await this._getPage(pageId);
+		return { url: page.url(), title: await page.title().catch(() => '') };
+	}
+
 	async invokeFunctionRaw<T>(pageId: string, fnDef: string, ...args: unknown[]): Promise<T> {
+		this._guardAction(`raw:${pageId}:${fnDef}`);
 		const fn = await this._compileFunction(fnDef);
 		return this._runAgainstPage(pageId, (page) => fn(page, args) as T);
 	}
 
-	async invokeFunction(pageId: string, fnDef: string, args: unknown[] = [], timeoutMs?: number): Promise<IInvokeFunctionResult> {
+	async invokeFunction(pageId: string, fnDef: string, args: unknown[] = [], timeoutMs?: number, isArbitraryCode = false): Promise<IInvokeFunctionResult> {
+		if (isArbitraryCode && ++this._runCodeCount > MAX_RUN_CODE_ACTIONS) { throw new Error(`Playwright code budget exceeded (${MAX_RUN_CODE_ACTIONS} calls per conversation session).`); }
+		this._guardAction(`invoke:${pageId}:${fnDef}`, /\.(?:goto|goBack|goForward|reload)\s*\(/.test(fnDef));
 		this.logService.info(`[PlaywrightSession] Invoking function on view ${pageId}`);
 
 		const logCtx: IExecutionLogContext = {
@@ -471,6 +551,7 @@ class PlaywrightSession extends Disposable {
 	}
 
 	async waitForDeferredResult(deferredResultId: string, timeoutMs: number): Promise<IInvokeFunctionResult> {
+		this._guardAction(`deferred:${deferredResultId}`);
 		const entry = this._deferredResults.get(deferredResultId);
 		if (!entry) {
 			throw new Error(`No deferred result found with ID "${deferredResultId}". It may have been cleaned up or already consumed.`);
@@ -485,6 +566,7 @@ class PlaywrightSession extends Disposable {
 	}
 
 	async replyToFileChooser(pageId: string, files: string[]): Promise<{ summary: string }> {
+		this._guardAction(`files:${pageId}`);
 		const page = await this._getPage(pageId);
 		const tab = this._tabs.get(page);
 		if (!tab) {
@@ -496,6 +578,7 @@ class PlaywrightSession extends Disposable {
 	}
 
 	async replyToDialog(pageId: string, accept: boolean, promptText?: string): Promise<{ summary: string }> {
+		this._guardAction(`dialog:${pageId}:${accept}:${promptText ?? ''}`);
 		const page = await this._getPage(pageId);
 		const tab = this._tabs.get(page);
 		if (!tab) {
@@ -606,8 +689,17 @@ class PlaywrightSession extends Disposable {
 	}
 
 	private async _compileFunction(fnDef: string): Promise<(page: Page, args: unknown[]) => unknown> {
+		if (fnDef.length > 20_000) { throw new Error('Playwright code exceeds the 20,000 character budget.'); }
 		const vm = await import('vm');
 		return vm.compileFunction(`return (${fnDef})(page, ...args)`, ['page', 'args'], { parsingContext: vm.createContext() }) as (page: Page, args: unknown[]) => unknown;
+	}
+
+	private _guardAction(fingerprint: string, navigation = false): void {
+		this._actionCount++;
+		if (this._actionCount > MAX_SESSION_ACTIONS) { throw new Error(`Integrated browser action budget exceeded (${MAX_SESSION_ACTIONS}).`); }
+		if (navigation && ++this._navigationCount > MAX_SESSION_NAVIGATIONS) { throw new Error(`Integrated browser navigation budget exceeded (${MAX_SESSION_NAVIGATIONS}).`); }
+		if (fingerprint === this._lastAction) { this._identicalActionCount++; } else { this._lastAction = fingerprint; this._identicalActionCount = 1; }
+		if (this._identicalActionCount > MAX_IDENTICAL_ACTIONS) { throw new Error(`Integrated browser anti-loop policy blocked the same action after ${MAX_IDENTICAL_ACTIONS} repetitions.`); }
 	}
 
 	// --- Private: page matching (view ↔ page pairing) ---
@@ -674,7 +766,7 @@ class PlaywrightSession extends Disposable {
 		this._onContextAdded(page.context());
 		page.once('close', () => this._onPageRemoved(page));
 		page.setDefaultTimeout(10000);
-		this._tabs.set(page, new PlaywrightTab(page, this.actionScope, this.agentNetworkFilterService));
+		this._tabs.set(page, new PlaywrightTab(page, this.actionScope, this.agentNetworkFilterService, this.artifactDirectory));
 
 		const deferred = new DeferredPromise<string>();
 		const timeout = setTimeout(() => deferred.error(new Error(`Timed out waiting for browser view`)), timeoutMs);
@@ -703,11 +795,19 @@ class PlaywrightSession extends Disposable {
 			return;
 		}
 		this._watchedContexts.add(context);
+		this._startTracing(context);
 		context.on('page', (page: Page) => this._onPageAdded(page));
-		context.on('close', () => this._watchedContexts.delete(context));
+		context.on('close', () => { this._watchedContexts.delete(context); this._tracePaths.delete(context); });
 		for (const page of context.pages()) {
 			this._onPageAdded(page);
 		}
+	}
+
+	private _startTracing(context: BrowserContext): void {
+		if (!this.artifactDirectory || this._tracePaths.has(context)) { return; }
+		const tracePath = join(this.artifactDirectory, `trace-${generateUuid()}.zip`);
+		this._tracePaths.set(context, tracePath);
+		void context.tracing.start({ screenshots: true, snapshots: true, sources: false }).catch(() => this._tracePaths.delete(context));
 	}
 
 	// --- Private: matching ---
@@ -754,7 +854,9 @@ class PlaywrightSession extends Disposable {
 
 	override dispose(): void {
 		this._stopScanning();
-		this._browser?.close().catch(() => { /* ignore */ });
+		const traceStops = [...this._tracePaths].map(([context, tracePath]) => context.tracing.stop({ path: tracePath }).catch(() => undefined));
+		this._tracePaths.clear();
+		void Promise.all(traceStops).finally(() => this._browser?.close().catch(() => { /* ignore */ }));
 		for (const { page } of this._viewIdQueue) {
 			page.error(new Error('PlaywrightSession disposed'));
 		}

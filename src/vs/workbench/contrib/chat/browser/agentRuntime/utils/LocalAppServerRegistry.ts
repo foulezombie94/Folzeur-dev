@@ -48,18 +48,36 @@ export class LocalAppServerRegistry extends Disposable {
 		return url;
 	}
 
+	public getKnownUrl(root: URI | string): string | undefined {
+		const key = typeof root === 'string' ? URI.file(root).toString() : root.toString();
+		return this.servers.get(key);
+	}
+
+	/** Records a loopback URL announced by a dev server without trusting arbitrary terminal URLs. */
+	public registerDetectedUrl(root: string, candidate: string): boolean {
+		let url: URL;
+		try { url = new URL(candidate); } catch { return false; }
+		if (!['http:', 'https:'].includes(url.protocol) || !['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)) { return false; }
+		this.servers.set(URI.file(root).toString(), url.toString());
+		return true;
+	}
+
+	public listKnownServers(): readonly { root: string; url: string }[] {
+		return [...this.servers].map(([root, url]) => ({ root, url }));
+	}
+
 	/** Resolves only loopback URLs owned by a server launched through this registry. */
 	public resolveOwnedUrl(candidate: string): URL | undefined {
 		let requested: URL;
-		try {requested = new URL(candidate);} catch {return undefined;}
-		if (requested.protocol !== 'http:' || !['127.0.0.1', 'localhost', '[::1]'].includes(requested.hostname)) {return undefined;}
+		try { requested = new URL(candidate); } catch { return undefined; }
+		if (requested.protocol !== 'http:' || !['127.0.0.1', 'localhost', '[::1]'].includes(requested.hostname)) { return undefined; }
 		for (const registered of this.servers.values()) {
 			let owned: URL;
-			try {owned = new URL(registered);} catch {continue;}
-			if (requested.origin !== owned.origin) {continue;}
+			try { owned = new URL(registered); } catch { continue; }
+			if (requested.origin !== owned.origin) { continue; }
 			let tokenMatches = true;
-			for (const [name, value] of owned.searchParams) {if (requested.searchParams.get(name) !== value) {tokenMatches = false; break;}}
-			if (tokenMatches) {return requested;}
+			for (const [name, value] of owned.searchParams) { if (requested.searchParams.get(name) !== value) { tokenMatches = false; break; } }
+			if (tokenMatches) { return requested; }
 		}
 		return undefined;
 	}
